@@ -1,0 +1,8 @@
+{
+  "name": "Remix student-biometric-attendance-system",
+  "description": "Imported from GitHub: jonesdarko345-byte/student-biometric-attendance-system",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
