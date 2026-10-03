@@ -34,6 +34,11 @@
           "description": "Academic class level (e.g. Level 300)",
           "maxLength": 30
         },
+        "stream": {
+          "type": "string",
+          "description": "Class stream division (e.g. IT A)",
+          "maxLength": 30
+        },
         "enrolledFingers": {
           "type": "array",
           "description": "List of enrolled finger labels"

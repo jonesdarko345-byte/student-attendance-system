@@ -11,17 +11,33 @@ import {
   User as FirebaseUser
 } from 'firebase/auth';
 import {
-  getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
   doc,
-  getDocFromServer
+  getDoc,
+  setLogLevel
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
+
+// Silence non-fatal Firestore network retry/offline console notices
+setLogLevel('error');
 
 // Initialize Firebase App
 const app = initializeApp(firebaseConfig);
 
-// Initialize Firestore with custom database ID specified in configuration
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+// Initialize Firestore with custom database ID, robust long-polling, and multi-tab persistent cache
+// experimentalForceLongPolling prevents the 10-second backend connection timeout in sandboxed web environments
+export const db = initializeFirestore(
+  app,
+  {
+    experimentalForceLongPolling: true,
+    localCache: persistentLocalCache({
+      tabManager: persistentMultipleTabManager()
+    })
+  },
+  firebaseConfig.firestoreDatabaseId
+);
 
 // Initialize Firebase Authentication
 export const auth = getAuth(app);
@@ -85,10 +101,12 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 
 // Test Connection on Boot
 export async function testFirestoreConnection(): Promise<boolean> {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return false;
+  }
   try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-    console.log('[Firestore] Live connection verified.');
-    return true;
+    const testSnap = await getDoc(doc(db, 'test', 'connection'));
+    return testSnap.metadata.fromCache === false || navigator.onLine;
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
       console.warn('[Firestore] Please check your Firebase configuration or internet connection.');

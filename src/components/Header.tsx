@@ -93,10 +93,16 @@ export const Header: React.FC = () => {
           
           {/* Logo & School Title */}
           <button
-            onClick={() => setActiveTab('home')}
-            className="flex items-center gap-2.5 sm:gap-3 text-left focus:outline-none group cursor-pointer min-w-0"
+            onClick={() => {
+              setActiveTab('home');
+              if (isRoleMenuOpen) setIsRoleMenuOpen(false);
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            className="flex items-center gap-2.5 sm:gap-3 text-left focus:outline-none group cursor-pointer min-w-0 active:scale-95 transition-transform duration-150"
+            title="Return to Dashboard"
+            aria-label="Return to UENR Attendance Dashboard"
           >
-            <div className="relative flex-shrink-0 w-9 h-9 sm:w-11 sm:h-11 md:w-12 md:h-12 rounded-xl bg-white p-1 shadow-sm border border-emerald-500/30 flex items-center justify-center overflow-hidden">
+            <div className="relative flex-shrink-0 w-9 h-9 sm:w-11 sm:h-11 md:w-12 md:h-12 rounded-xl bg-white p-1 shadow-sm border border-emerald-500/30 flex items-center justify-center overflow-hidden group-hover:scale-105 transition-transform duration-150">
               <img
                 src="/assets/uenr_logo.jpg"
                 alt="UENR Logo"

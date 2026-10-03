@@ -15,10 +15,10 @@ const AppContent: React.FC = () => {
 
   return (
     <AccessGate>
-      <div className="min-h-screen bg-[#f6fafb] dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col selection:bg-teal-500 selection:text-white transition-colors duration-200">
+      <div className="min-h-screen bg-[#f6fafb] dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col selection:bg-teal-500 selection:text-white transition-colors duration-200 overflow-x-hidden w-full max-w-full">
         <Header />
         
-        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-6 sm:pt-8 pb-20 lg:pb-8">
+        <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 pt-4 sm:pt-8 pb-28 lg:pb-12 min-w-0">
           {activeTab === 'home' && <Home />}
           {activeTab === 'attendance' && <Attendance />}
           {activeTab === 'timetable' && <Timetable />}

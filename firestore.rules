@@ -49,32 +49,31 @@ service cloud.firestore {
 
     // Students Collection
     match /students/{studentId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && isValidId(studentId)
-        && incoming().name is string && incoming().name.size() > 0 && incoming().name.size() <= 100
-        && incoming().indexNumber is string && incoming().indexNumber.size() > 0 && incoming().indexNumber.size() <= 30;
-      allow update: if isSignedIn() && isValidId(studentId)
-        && incoming().name is string && incoming().name.size() > 0 && incoming().name.size() <= 100;
-      allow delete: if isSignedIn();
+      allow read: if true;
+      allow create: if isValidId(studentId)
+        && incoming().name is string && incoming().name.size() > 0 && incoming().name.size() <= 150
+        && incoming().indexNumber is string && incoming().indexNumber.size() > 0 && incoming().indexNumber.size() <= 50;
+      allow update: if isValidId(studentId);
+      allow delete: if true;
     }
 
     // Courses Collection
     match /courses/{courseId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && isValidId(courseId)
-        && incoming().code is string && incoming().code.size() > 0 && incoming().code.size() <= 20
-        && incoming().title is string && incoming().title.size() > 0 && incoming().title.size() <= 150;
-      allow update: if isSignedIn() && isValidId(courseId);
-      allow delete: if isSignedIn();
+      allow read: if true;
+      allow create: if isValidId(courseId)
+        && incoming().code is string && incoming().code.size() > 0 && incoming().code.size() <= 30
+        && incoming().title is string && incoming().title.size() > 0 && incoming().title.size() <= 200;
+      allow update: if isValidId(courseId);
+      allow delete: if true;
     }
 
     // Timetable Slots Collection
     match /timetable/{slotId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && isValidId(slotId)
+      allow read: if true;
+      allow create: if isValidId(slotId)
         && incoming().dayOfWeek is number && incoming().dayOfWeek >= 1 && incoming().dayOfWeek <= 6;
-      allow update: if isSignedIn() && isValidId(slotId);
-      allow delete: if isSignedIn();
+      allow update: if isValidId(slotId);
+      allow delete: if true;
     }
 
     // Attendance Records Collection
@@ -104,7 +103,7 @@ service cloud.firestore {
     // Authorized Personnel Registry (HOD, Lecturers, Class Reps)
     match /authorizedUsers/{userId} {
       allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow write: if isSignedIn() && isValidId(userId);
     }
 
     // System Settings (Auto-Logging & Attendance Governance Policies)

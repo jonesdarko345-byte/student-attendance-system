@@ -577,7 +577,7 @@ export const Timetable: React.FC = () => {
             </div>
           ) : (
             /* Multi-Day Column Grid */
-            <div className={`grid grid-cols-1 md:grid-cols-${visibleDays.length} gap-4`}>
+            <div className={`grid grid-cols-1 ${visibleDays.length === 6 ? 'md:grid-cols-6' : 'md:grid-cols-5'} gap-4`}>
               {visibleDays.map((day) => {
                 const daySlots = filteredTimetable
                   .filter((slot) => slot.dayOfWeek === day.id)
@@ -640,7 +640,7 @@ export const Timetable: React.FC = () => {
                                     </span>
                                   )}
                                 </div>
-                                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                                   <button
                                     onClick={() => {
                                       setEditingSlot(slot);
@@ -651,17 +651,19 @@ export const Timetable: React.FC = () => {
                                       setEditSlotVenue(slot.venue);
                                       setEditSlotStream(slot.stream || 'all');
                                     }}
-                                    className="text-slate-400 hover:text-[#007c82] dark:hover:text-teal-400 p-0.5 cursor-pointer"
+                                    className="text-slate-400 hover:text-[#007c82] dark:hover:text-teal-400 p-1 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
                                     title="Edit slot"
+                                    aria-label="Edit lecture slot"
                                   >
-                                    <Edit2 className="w-3 h-3" />
+                                    <Edit2 className="w-3.5 h-3.5" />
                                   </button>
                                   <button
                                     onClick={() => removeTimetableSlot(slot.id)}
-                                    className="text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 p-0.5 cursor-pointer"
+                                    className="text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 p-1 rounded-md hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
                                     title="Remove slot"
+                                    aria-label="Remove lecture slot"
                                   >
-                                    <Trash2 className="w-3 h-3" />
+                                    <Trash2 className="w-3.5 h-3.5" />
                                   </button>
                                 </div>
                               </div>
@@ -854,8 +856,8 @@ export const Timetable: React.FC = () => {
 
       {/* UNIFIED MODAL: ASSIGN COURSE & STUDY DAYS */}
       {showAssignModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-xl w-full p-6 space-y-5 my-8">
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl w-[94vw] sm:max-w-xl p-5 sm:p-6 space-y-5 my-auto max-h-[90vh] overflow-y-auto touch-scroll">
             <div className="flex items-start justify-between">
               <div>
                 <span className="text-[10px] font-black text-[#007c82] uppercase tracking-wider">
@@ -1143,8 +1145,8 @@ export const Timetable: React.FC = () => {
 
       {/* EDIT SLOT MODAL */}
       {editingSlot && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-md w-full p-6 space-y-4">
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl w-[94vw] sm:max-w-md p-5 sm:p-6 space-y-4 my-auto max-h-[90vh] overflow-y-auto touch-scroll">
             <div className="flex items-start justify-between">
               <div>
                 <h3 className="text-lg font-black text-slate-900">Edit Class Session</h3>
@@ -1275,8 +1277,8 @@ export const Timetable: React.FC = () => {
 
       {/* EDIT COURSE MODAL */}
       {editingCourse && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-md w-full p-6 space-y-4">
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl w-[94vw] sm:max-w-md p-5 sm:p-6 space-y-4 my-auto max-h-[90vh] overflow-y-auto touch-scroll">
             <div className="flex items-start justify-between">
               <div>
                 <h3 className="text-lg font-black text-slate-900">Edit Course Details</h3>
@@ -1367,8 +1369,8 @@ export const Timetable: React.FC = () => {
 
       {/* CONFIRMATION MODAL FOR CLEARING */}
       {showClearConfirm && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-sm w-full p-6 space-y-4 text-center">
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl w-[94vw] sm:max-w-sm p-6 space-y-4 text-center my-auto">
             <div className="w-12 h-12 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center mx-auto">
               <AlertCircle className="w-6 h-6" />
             </div>

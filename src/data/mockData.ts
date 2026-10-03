@@ -13,6 +13,7 @@ export const INITIAL_ATTENDANCE: AttendanceRecord[] = [];
 
 // Whitelist of authorized staff and class reps
 // Lecturers only appear when explicitly added/assigned by the HOD
+// Class Reps only appear when explicitly added/assigned by HOD or Lecturers
 export const INITIAL_AUTHORIZED_USERS: AuthorizedUser[] = [
   {
     id: 'auth-1',
@@ -21,15 +22,6 @@ export const INITIAL_AUTHORIZED_USERS: AuthorizedUser[] = [
     role: 'hod',
     department: 'Department of Information Technology',
     addedAt: '2025-01-10'
-  },
-  {
-    id: 'auth-3',
-    email: 'classrep.it300@uenr.edu.gh',
-    name: 'Kofi Mensah (Class Rep)',
-    role: 'class_rep',
-    department: 'Department of Information Technology',
-    level: 'Level 300',
-    addedAt: '2025-01-15'
   }
 ];
 

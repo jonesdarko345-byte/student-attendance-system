@@ -28,10 +28,34 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
   const [formError, setFormError] = useState('');
 
   const isHod = currentUser.role === 'hod';
+  const isLecturer = currentUser.role === 'lecturer';
+  const isClassRep = currentUser.role === 'class_rep';
+  const canAuthorize = isHod || isLecturer;
+
+  const openAddModal = () => {
+    setFormError('');
+    setName('');
+    setEmail('');
+    setAssignedInfo('');
+    setAssignedStream('IT A');
+    if (isLecturer) {
+      setRole('class_rep');
+    } else {
+      setRole('lecturer');
+    }
+    setShowAddModal(true);
+  };
 
   const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError('');
+
+    if (isClassRep) {
+      setFormError('Class Representatives do not have permission to assign personnel.');
+      return;
+    }
+
+    const assignedRole: UserRole = isLecturer ? 'class_rep' : role;
 
     if (!name.trim() || !email.trim()) {
       setFormError('Please enter both full name and Google email address.');
@@ -52,11 +76,11 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
     await addAuthorizedUser({
       name: name.trim(),
       email: cleanEmail,
-      role,
+      role: assignedRole,
       department,
-      courseAssigned: role === 'lecturer' ? assignedInfo.trim() : undefined,
-      level: role === 'class_rep' ? assignedInfo.trim() : undefined,
-      stream: role === 'class_rep' ? assignedStream : undefined
+      courseAssigned: assignedRole === 'lecturer' ? assignedInfo.trim() : undefined,
+      level: assignedRole === 'class_rep' ? assignedInfo.trim() : undefined,
+      stream: assignedRole === 'class_rep' ? assignedStream : undefined
     });
 
     setName('');
@@ -116,14 +140,19 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
           </div>
         </div>
 
-        {isHod && (
+        {canAuthorize ? (
           <button
-            onClick={() => setShowAddModal(true)}
+            onClick={openAddModal}
             className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs sm:text-sm rounded-xl shadow-lg transition-all flex items-center gap-2 cursor-pointer flex-shrink-0"
           >
             <UserPlus className="w-4 h-4" />
-            <span>Authorize New Personnel</span>
+            <span>{isHod ? 'Authorize Personnel (Lecturer / Class Rep)' : 'Assign Class Representative'}</span>
           </button>
+        ) : (
+          <div className="px-3.5 py-2 bg-white/10 border border-white/20 rounded-xl text-xs text-emerald-200 flex items-center gap-2">
+            <Lock className="w-3.5 h-3.5 text-emerald-300" />
+            <span>Class Rep View (Read-Only)</span>
+          </div>
         )}
       </div>
 
@@ -134,8 +163,13 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
             <Building2 className="w-4 h-4" />
           </div>
           <div className="text-xs">
-            <p className="font-bold text-slate-800 dark:text-slate-100">Head of Department (HOD)</p>
-            <p className="text-slate-500 dark:text-slate-400 mt-0.5">Authorizes Lecturers and Class Reps, manages semester syllabus and overrides locked sessions.</p>
+            <div className="flex items-center gap-1.5">
+              <p className="font-bold text-slate-800 dark:text-slate-100">Head of Department (HOD)</p>
+              <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-100 dark:bg-purple-900/60 text-purple-700 dark:text-purple-300 font-semibold">Full Authority</span>
+            </div>
+            <p className="text-slate-500 dark:text-slate-400 mt-1">
+              Authorizes <strong>Course Lecturers</strong> and <strong>Class Representatives</strong>. Manages academic semesters, locks, and security governance.
+            </p>
           </div>
         </div>
 
@@ -144,8 +178,13 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
             <Users className="w-4 h-4" />
           </div>
           <div className="text-xs">
-            <p className="font-bold text-slate-800 dark:text-slate-100">Course Lecturers</p>
-            <p className="text-slate-500 dark:text-slate-400 mt-0.5">Mark attendance, run biometric verification, view analytics, and export student reports.</p>
+            <div className="flex items-center gap-1.5">
+              <p className="font-bold text-slate-800 dark:text-slate-100">Course Lecturers</p>
+              <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 font-semibold">Can Assign Reps</span>
+            </div>
+            <p className="text-slate-500 dark:text-slate-400 mt-1">
+              Mark attendance, run biometric scans, view analytics, and <strong>can assign Class Representatives</strong> for their assigned courses.
+            </p>
           </div>
         </div>
 
@@ -154,8 +193,13 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
             <GraduationCap className="w-4 h-4" />
           </div>
           <div className="text-xs">
-            <p className="font-bold text-slate-800 dark:text-slate-100">Class Representatives</p>
-            <p className="text-slate-500 dark:text-slate-400 mt-0.5">Assist in taking roll calls for scheduled class sessions and registering classmates&apos; fingerprints.</p>
+            <div className="flex items-center gap-1.5">
+              <p className="font-bold text-slate-800 dark:text-slate-100">Class Representatives</p>
+              <span className="text-[10px] px-1.5 py-0.2 rounded bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-300 font-semibold">Assigned by HOD/Lecturer</span>
+            </div>
+            <p className="text-slate-500 dark:text-slate-400 mt-1">
+              Assists in taking roll calls and biometric verification. <em>Zero auto-assignment:</em> only designated students assigned by HOD or Lecturer appear here.
+            </p>
           </div>
         </div>
       </div>
@@ -235,7 +279,7 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
                     <td className="py-3.5 px-6 text-right">
                       {isMasterUser ? (
                         <span className="text-[10px] text-slate-400 dark:text-slate-500 italic">Primary HOD</span>
-                      ) : isHod ? (
+                      ) : (isHod || (isLecturer && user.role === 'class_rep')) ? (
                         <button
                           onClick={() => {
                             if (confirm(`Revoke portal access for ${user.name} (${user.email})?`)) {
@@ -247,6 +291,8 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
+                      ) : isLecturer ? (
+                        <span className="text-[10px] text-slate-400 dark:text-slate-500">HOD Managed</span>
                       ) : (
                         <span className="text-[10px] text-slate-400 dark:text-slate-500">Protected</span>
                       )}
@@ -269,8 +315,14 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
                   <UserPlus className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-slate-900 dark:text-white">Authorize New Personnel</h3>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">Grant portal access to Lecturer, HOD, or Class Rep</p>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    {isLecturer ? 'Assign Class Representative' : 'Authorize New Personnel'}
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {isLecturer
+                      ? 'Assign a student as Class Representative for your course and stream'
+                      : 'Assign Course Lecturer, Class Representative, or Head of Department'}
+                  </p>
                 </div>
               </div>
               <button
@@ -290,12 +342,14 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
               )}
 
               <div>
-                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">Full Name *</label>
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  {isLecturer ? 'Class Rep Full Name *' : 'Full Name *'}
+                </label>
                 <input
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g. Dr. Emmanuel Mensah or Akosua Serwaa"
+                  placeholder={isLecturer ? 'e.g. Akosua Serwaa' : 'e.g. Dr. Emmanuel Mensah or Akosua Serwaa'}
                   required
                   className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-[#007c82] text-xs"
                 />
@@ -309,7 +363,7 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="e.g. emmanuel.mensah@uenr.edu.gh or name@gmail.com"
+                  placeholder="e.g. student@uenr.edu.gh or name@gmail.com"
                   required
                   className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-[#007c82] text-xs"
                 />
@@ -321,28 +375,39 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">System Role *</label>
-                  <select
-                    value={role}
-                    onChange={(e) => setRole(e.target.value as UserRole)}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-[#007c82] bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 text-xs font-semibold"
-                  >
-                    <option value="lecturer">Lecturer (Mark Attendance & Reports)</option>
-                    <option value="class_rep">Class Representative (In-class assistance)</option>
-                    <option value="hod">Head of Department (Full Administrator)</option>
-                  </select>
+                  {isLecturer ? (
+                    <div className="w-full px-3 py-2 rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50/70 dark:bg-blue-950/40 text-blue-800 dark:text-blue-300 text-xs font-bold flex items-center gap-1.5">
+                      <GraduationCap className="w-3.5 h-3.5 text-blue-600" />
+                      <span>Class Rep (Lecturer Assigned)</span>
+                    </div>
+                  ) : (
+                    <select
+                      value={role}
+                      onChange={(e) => setRole(e.target.value as UserRole)}
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-[#007c82] bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 text-xs font-semibold"
+                    >
+                      <option value="lecturer">Lecturer (Mark Attendance & Reports)</option>
+                      <option value="class_rep">Class Representative (In-class assistance)</option>
+                      <option value="hod">Head of Department (Full Administrator)</option>
+                    </select>
+                  )}
                 </div>
 
                 <div>
                   <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    {role === 'class_rep' ? 'Class Level' : role === 'lecturer' ? 'Assigned Course Code' : 'Department'}
+                    {(isLecturer || role === 'class_rep')
+                      ? 'Class Level'
+                      : role === 'lecturer'
+                      ? 'Assigned Course Code'
+                      : 'Department'}
                   </label>
                   <input
                     type="text"
                     value={assignedInfo}
                     onChange={(e) => setAssignedInfo(e.target.value)}
                     placeholder={
-                      role === 'class_rep'
-                        ? 'e.g. Level 100'
+                      (isLecturer || role === 'class_rep')
+                        ? 'e.g. Level 100, Level 200'
                         : role === 'lecturer'
                         ? 'e.g. IT 101, IT 103'
                         : 'Department of IT'
@@ -352,7 +417,7 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
                 </div>
               </div>
 
-              {role === 'class_rep' && (
+              {(isLecturer || role === 'class_rep') && (
                 <div>
                   <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
                     Assigned Class Division / Stream *
@@ -394,7 +459,7 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
                   className="px-5 py-2.5 rounded-xl bg-[#003b5c] hover:bg-[#004e75] text-white font-bold shadow-md cursor-pointer flex items-center gap-2"
                 >
                   <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                  <span>Authorize Account</span>
+                  <span>{isLecturer ? 'Assign Class Representative' : 'Authorize Account'}</span>
                 </button>
               </div>
             </form>

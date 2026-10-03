@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { BiometricAttendance } from '../components/BiometricAttendance';
 import {
@@ -78,11 +78,14 @@ export const Attendance: React.FC = () => {
     }
   }, [courses, selectedCourseId]);
 
-  // Filter students belonging to this stream / division
-  const streamStudents = students.filter((s) => {
-    if (selectedStream === 'all') return true;
-    return s.stream === selectedStream;
-  });
+  // Filter students belonging to this stream / division (arranged alphabetically by name)
+  const streamStudents = useMemo(() => {
+    const list = students.filter((s) => {
+      if (selectedStream === 'all') return true;
+      return s.stream === selectedStream;
+    });
+    return [...list].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  }, [students, selectedStream]);
 
   // Load existing attendance record for this date + course + stream
   const existingRecord = attendanceRecords.find((r) => {
@@ -191,12 +194,14 @@ export const Attendance: React.FC = () => {
     }
   };
 
-  // Filter students by search within the stream
-  const filteredStudents = streamStudents.filter(
-    (s) =>
-      s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.indexNumber.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // Filter students by search within the stream (maintains alphabetical order)
+  const filteredStudents = useMemo(() => {
+    return streamStudents.filter(
+      (s) =>
+        s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        s.indexNumber.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+  }, [streamStudents, searchQuery]);
 
   const presentCount = streamStudents.filter((s) => sessionRecords[s.id] === 'present').length;
   const absentCount = streamStudents.filter((s) => sessionRecords[s.id] === 'absent' || !sessionRecords[s.id]).length;
@@ -539,8 +544,119 @@ export const Attendance: React.FC = () => {
             </div>
           </div>
 
-          {/* Students Attendance Table */}
-          <div className="overflow-x-auto">
+          {/* Students Attendance List (Responsive Dual-View) */}
+          
+          {/* 1. Mobile Cards View (< 768px) */}
+          <div className="block md:hidden divide-y divide-slate-100 dark:divide-slate-800">
+            {streamStudents.length === 0 ? (
+              <div className="p-8 text-center text-slate-500 dark:text-slate-400">
+                <p className="font-bold text-sm text-slate-700 dark:text-slate-300">No students in this class division</p>
+                <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
+                  Please assign students in the <strong>Student Roster & Staff</strong> tab.
+                </p>
+              </div>
+            ) : filteredStudents.length === 0 ? (
+              <div className="p-6 text-center text-xs text-slate-400 dark:text-slate-500">
+                No students found matching your search.
+              </div>
+            ) : (
+              filteredStudents.map((student, idx) => {
+                const status = sessionRecords[student.id] || 'absent';
+                const isPresent = status === 'present';
+                const isBiometricVerified = biometricVerifiedIds.includes(student.id);
+                const isEnrolled = student.enrolledFingers && student.enrolledFingers.length > 0;
+
+                return (
+                  <div
+                    key={student.id}
+                    className={`p-3.5 space-y-3 transition-colors ${
+                      isPresent
+                        ? 'bg-emerald-50/30 dark:bg-emerald-950/20'
+                        : 'bg-white dark:bg-slate-900'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-[11px] text-slate-400 dark:text-slate-500 font-semibold">
+                            #{idx + 1}
+                          </span>
+                          <span className="font-bold text-sm text-slate-900 dark:text-white truncate">
+                            {student.name}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 truncate">
+                          {student.program}
+                        </div>
+                      </div>
+
+                      <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-teal-50 dark:bg-teal-950/60 text-[#007c82] dark:text-teal-300 border border-teal-200 dark:border-teal-800 shrink-0">
+                        {student.stream || 'IT A'}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2 pt-0.5">
+                      <span className="font-mono text-xs font-semibold text-slate-700 dark:text-slate-300">
+                        {student.indexNumber}
+                      </span>
+
+                      <div>
+                        {isBiometricVerified ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-teal-100 dark:bg-teal-950/60 text-teal-800 dark:text-teal-300 text-[10px] font-bold">
+                            <Fingerprint className="w-3 h-3 text-teal-600 dark:text-teal-400" />
+                            Bio-Verified
+                          </span>
+                        ) : isEnrolled ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-[10px]">
+                            <Fingerprint className="w-3 h-3 text-slate-400" />
+                            {student.enrolledFingers.length} finger(s)
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium">
+                            Not Enrolled
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Touch-Friendly Action Buttons (Minimum 44px Height) */}
+                    <div className="grid grid-cols-2 gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => handleMarkStatus(student.id, 'present')}
+                        disabled={isFinalized}
+                        className={`h-11 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer active:scale-98 ${
+                          isPresent
+                            ? 'bg-emerald-600 text-white shadow-sm ring-2 ring-emerald-600/30'
+                            : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700'
+                        } disabled:opacity-50`}
+                      >
+                        <CheckCircle2 className={`w-4 h-4 ${isPresent ? 'text-white' : 'text-slate-400'}`} />
+                        <span>Present</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleMarkStatus(student.id, 'absent')}
+                        disabled={isFinalized}
+                        className={`h-11 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer active:scale-98 ${
+                          !isPresent
+                            ? 'bg-rose-600 text-white shadow-sm ring-2 ring-rose-600/30'
+                            : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700'
+                        } disabled:opacity-50`}
+                      >
+                        <XCircle className={`w-4 h-4 ${!isPresent ? 'text-white' : 'text-slate-400'}`} />
+                        <span>Absent</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* 2. Desktop Table View (>= 768px) */}
+          <div className="hidden md:block overflow-x-auto touch-scroll">
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/50 text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">

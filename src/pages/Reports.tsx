@@ -325,7 +325,82 @@ export const Reports: React.FC = () => {
           </div>
         </div>
 
-        <div className="overflow-x-auto">
+        {/* 1. Mobile Cards View (< 768px) */}
+        <div className="block md:hidden divide-y divide-slate-100 dark:divide-slate-800">
+          {studentStats.length === 0 ? (
+            <div className="py-12 px-4 text-center text-slate-500 dark:text-slate-400">
+              <p className="font-bold text-sm text-slate-700 dark:text-slate-300">No Student Records Found</p>
+              <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
+                No students found in this division or matching the selected filters.
+              </p>
+            </div>
+          ) : (
+            studentStats.map((item, idx) => (
+              <div key={item.student.id} className="p-4 space-y-3 bg-white dark:bg-slate-900">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-[11px] text-slate-400 dark:text-slate-500 font-semibold">
+                        #{idx + 1}
+                      </span>
+                      <span className="font-bold text-sm text-slate-900 dark:text-white truncate">
+                        {item.student.name}
+                      </span>
+                    </div>
+                    <div className="font-mono text-xs font-semibold text-slate-600 dark:text-slate-400 mt-0.5">
+                      {item.student.indexNumber}
+                    </div>
+                  </div>
+
+                  <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-teal-50 dark:bg-teal-950/60 text-[#007c82] dark:text-teal-300 border border-teal-200 dark:border-teal-800 shrink-0">
+                    {item.student.stream || 'IT A'}
+                  </span>
+                </div>
+
+                {/* Attendance Rate & Progress Bar */}
+                <div className="space-y-1.5 pt-1">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-slate-500 dark:text-slate-400">
+                      Attended: <strong className="text-slate-800 dark:text-slate-200">{item.attended}</strong> / {item.totalSessions} sessions
+                    </span>
+                    <span className={`font-black ${item.rate >= 75 ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                      {item.rate}%
+                    </span>
+                  </div>
+                  <div className="h-2 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all ${
+                        item.rate >= 75 ? 'bg-emerald-600 dark:bg-emerald-500' : 'bg-rose-500'
+                      }`}
+                      style={{ width: `${item.rate}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* Exam Status Pill */}
+                <div className="pt-1 flex items-center justify-between">
+                  <span className="text-[11px] text-slate-400">
+                    {item.rate >= 75 ? 'Meets UENR 75% rule' : 'Barred from exam (< 75%)'}
+                  </span>
+                  {item.isEligibleForExam ? (
+                    <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-xs font-bold">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                      Exam Eligible
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-rose-50 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300 border border-rose-200 dark:border-rose-800 text-xs font-bold">
+                      <AlertTriangle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+                      At Risk (&lt;75%)
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* 2. Desktop Table View (>= 768px) */}
+        <div className="hidden md:block overflow-x-auto touch-scroll">
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/50 text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
@@ -418,7 +493,7 @@ export const Reports: React.FC = () => {
           </p>
         </div>
 
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto touch-scroll">
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/50 text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">

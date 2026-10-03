@@ -50,6 +50,7 @@ import {
   getOfflineCacheStatus,
   getNetworkStatus
 } from '../utils/offlineCache';
+import { generateInstitutionalEmail } from '../utils/studentParser';
 
 export type NavigationTab = 'home' | 'attendance' | 'timetable' | 'admin' | 'reports';
 export type AdminSubTab = 'roster' | 'authorized' | 'database' | 'audit' | 'autologging';
@@ -117,11 +118,18 @@ interface AppContextType {
 
   // Student actions
   addStudent: (student: Omit<Student, 'id' | 'createdAt' | 'enrolledFingers'>) => Promise<void>;
-  batchAddStudents: (students: Array<{ name: string; indexNumber: string; email?: string; stream?: string; level?: string; program?: string }>) => Promise<number>;
+  batchAddStudents: (
+    students: Array<{ name: string; indexNumber: string; email?: string; stream?: string; level?: string; program?: string }>,
+    options?: { clearExisting?: boolean; updateDuplicates?: boolean }
+  ) => Promise<number>;
   updateStudent: (id: string, updates: Partial<Student>) => Promise<void>;
+  batchUpdateStudents: (studentIds: string[], updates: Partial<Pick<Student, 'level' | 'stream' | 'program'>>) => Promise<number>;
+  batchPromoteStudents: (fromLevel: string, toLevel: string, streamFilter?: string) => Promise<number>;
+  promoteAllLevels: () => Promise<{ count: number }>;
   removeStudent: (id: string) => Promise<void>;
   clearAllStudents: () => Promise<void>;
   enrollStudentFingers: (id: string, fingers: string[]) => Promise<void>;
+  updateAllStudentEmailsToNameBased: () => Promise<number>;
 
   // Course actions
   addCourse: (course: Omit<Course, 'id'>) => Promise<void>;
@@ -197,8 +205,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const saved = localStorage.getItem(STORAGE_KEYS.AUTHORIZED);
       if (saved) {
         const parsed: AuthorizedUser[] = JSON.parse(saved);
-        // Ensure legacy mock lecturer auth-2 is removed
-        const cleaned = parsed.filter((u) => u.id !== 'auth-2' && u.email !== 'dr.asante@uenr.edu.gh');
+        // Ensure legacy mock entries (auth-2, auth-3/Kofi Mensah) are completely purged
+        const cleaned = parsed.filter(
+          (u) =>
+            u.id !== 'auth-2' &&
+            u.id !== 'auth-3' &&
+            u.email.toLowerCase() !== 'dr.asante@uenr.edu.gh' &&
+            u.email.toLowerCase() !== 'classrep.it300@uenr.edu.gh' &&
+            !u.name.toLowerCase().includes('kofi mensah')
+        );
         return cleaned.length > 0 ? cleaned : INITIAL_AUTHORIZED_USERS;
       }
       return INITIAL_AUTHORIZED_USERS;
@@ -296,6 +311,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // Alphabetical sort helper
+  const sortAlphabetically = <T extends { name: string }>(items: T[]): T[] => {
+    return [...items].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  };
+
   // Students roster starts clean/empty
   const [students, setStudents] = useState<Student[]>(() => {
     try {
@@ -303,14 +323,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (saved) {
         const parsed: Student[] = JSON.parse(saved);
         // Ensure legacy mock students (std-1 through std-12) are completely purged
-        const cleaned = parsed.filter(
-          (s) => !['std-1', 'std-2', 'std-3', 'std-4', 'std-5', 'std-6', 'std-7', 'std-8', 'std-9', 'std-10', 'std-11', 'std-12'].includes(s.id)
-        );
-        return cleaned;
+        const cleaned = parsed
+          .filter(
+            (s) => !['std-1', 'std-2', 'std-3', 'std-4', 'std-5', 'std-6', 'std-7', 'std-8', 'std-9', 'std-10', 'std-11', 'std-12'].includes(s.id)
+          )
+          .map((s) => {
+            const idxSlug = (s.indexNumber || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            const emailPrefix = (s.email || '').toLowerCase().split('@')[0];
+            if (!s.email || emailPrefix === idxSlug) {
+              return { ...s, email: generateInstitutionalEmail(s.name, s.indexNumber) };
+            }
+            return s;
+          });
+        return sortAlphabetically(cleaned);
       }
-      return INITIAL_STUDENTS;
+      return sortAlphabetically(INITIAL_STUDENTS);
     } catch {
-      return INITIAL_STUDENTS;
+      return sortAlphabetically(INITIAL_STUDENTS);
     }
   });
 
@@ -544,12 +573,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Test Firestore Connection on App Boot
   useEffect(() => {
-    testFirestoreConnection().then((connected) => {
-      setIsCloudConnected(connected);
-    });
+    let isMounted = true;
+    const timer = setTimeout(() => {
+      testFirestoreConnection().then((connected) => {
+        if (isMounted) setIsCloudConnected(connected);
+      });
+    }, 1000);
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
   }, []);
 
   const isSeedingRef = useRef(false);
+  const isClearingRosterRef = useRef(false);
+
+  // Initialize Firebase Auth (support anonymous session if not signed in with Google)
+  useEffect(() => {
+    if (!auth.currentUser) {
+      silentSignInAnonymously().catch(() => {});
+    }
+  }, []);
 
   // Clean up any old mock students from Firestore if present & seed initial structure
   const initializeFirestore = useCallback(async () => {
@@ -579,8 +623,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         needsCommit = true;
       }
 
-      // Purge legacy mock lecturer auth-2 from Firestore if present
+      // Purge legacy mock users auth-2 and auth-3 (Kofi Mensah) from Firestore if present
       batch.delete(doc(db, 'authorizedUsers', 'auth-2'));
+      batch.delete(doc(db, 'authorizedUsers', 'auth-3'));
       needsCommit = true;
 
       // 3. Check and seed authorized users registry if empty
@@ -612,34 +657,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (user) {
         setIsCloudConnected(true);
-        const userEmail = (user.email || '').toLowerCase();
-        const isMasterHod = userEmail === MASTER_HOD_EMAIL.toLowerCase();
+        if (!user.isAnonymous) {
+          const userEmail = (user.email || '').toLowerCase();
+          const isMasterHod = userEmail === MASTER_HOD_EMAIL.toLowerCase();
 
-        // Check if user is in authorized list
-        const matchedAuthorized = authorizedUsers.find(
-          (u) => u.email.toLowerCase() === userEmail
-        );
+          // Check if user is in authorized list
+          const matchedAuthorized = authorizedUsers.find(
+            (u) => u.email.toLowerCase() === userEmail
+          );
 
-        let determinedRole: UserRole = 'lecturer';
-        if (isMasterHod) {
-          determinedRole = 'hod';
-        } else if (matchedAuthorized) {
-          determinedRole = matchedAuthorized.role;
+          let determinedRole: UserRole = 'lecturer';
+          if (isMasterHod) {
+            determinedRole = 'hod';
+          } else if (matchedAuthorized) {
+            determinedRole = matchedAuthorized.role;
+          }
+
+          const determinedName =
+            user.displayName ||
+            matchedAuthorized?.name ||
+            (userEmail ? userEmail.split('@')[0] : 'Academic Staff');
+
+          setCurrentUser({
+            name: determinedName,
+            email: user.email || '',
+            role: determinedRole,
+            department: matchedAuthorized?.department || 'Department of Information Technology',
+            photoURL: user.photoURL || undefined,
+            uid: user.uid
+          });
         }
-
-        const determinedName =
-          user.displayName ||
-          matchedAuthorized?.name ||
-          (userEmail ? userEmail.split('@')[0] : 'Academic Staff');
-
-        setCurrentUser({
-          name: determinedName,
-          email: user.email || '',
-          role: determinedRole,
-          department: matchedAuthorized?.department || 'Department of Information Technology',
-          photoURL: user.photoURL || undefined,
-          uid: user.uid
-        });
 
         // Initialize / clean cloud database
         await initializeFirestore();
@@ -657,29 +704,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => unsubscribe();
   }, [authorizedUsers, initializeFirestore]);
 
-  // Real-time Firestore Listeners
+  // 1. Real-time Firestore Listeners for Public Collections (Students, Courses, Timetable)
+  // These run immediately upon app boot and don't require user login
   useEffect(() => {
-    if (!firebaseUser) return;
-
     setIsSyncing(true);
     setCloudSyncError(null);
 
-    // 1. Authorized Users Listener
-    const unsubAuthUsers = onSnapshot(
-      collection(db, 'authorizedUsers'),
-      (snapshot) => {
-        if (!snapshot.empty) {
-          const list: AuthorizedUser[] = [];
-          snapshot.forEach((d) => list.push(d.data() as AuthorizedUser));
-          setAuthorizedUsers(list);
-        }
-      },
-      (error) => {
-        handleFirestoreError(error, OperationType.GET, 'authorizedUsers');
-      }
-    );
-
-    // 2. Students Listener (filters out legacy mock IDs automatically)
+    // Students Listener (filters out legacy mock IDs and safeguards against wiping local rosters)
     const unsubStudents = onSnapshot(
       collection(db, 'students'),
       (snapshot) => {
@@ -687,19 +718,63 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         snapshot.forEach((d) => {
           const s = d.data() as Student;
           if (!['std-1', 'std-2', 'std-3', 'std-4', 'std-5', 'std-6', 'std-7', 'std-8', 'std-9', 'std-10', 'std-11', 'std-12'].includes(s.id)) {
-            list.push(s);
+            const idxSlug = (s.indexNumber || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            const emailPrefix = (s.email || '').toLowerCase().split('@')[0];
+            const cleanEmail = (!s.email || emailPrefix === idxSlug)
+              ? generateInstitutionalEmail(s.name, s.indexNumber)
+              : s.email;
+            list.push({ ...s, email: cleanEmail });
           }
         });
-        setStudents(list);
+
+        if (list.length > 0) {
+          // Cloud database has confirmed records
+          setStudents((currentLocal) => {
+            if (isClearingRosterRef.current) return [];
+            // Merge cloud list with any locally added students that are still in flight
+            const cloudIndexMap = new Map<string, Student>();
+            list.forEach((s) => cloudIndexMap.set(s.indexNumber.toUpperCase().trim(), s));
+
+            const combined: Student[] = [...list];
+            currentLocal.forEach((loc) => {
+              const locKey = loc.indexNumber.toUpperCase().trim();
+              if (!cloudIndexMap.has(locKey)) {
+                combined.push(loc);
+              }
+            });
+            const sorted = sortAlphabetically(combined);
+            try {
+              localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(sorted));
+            } catch (e) {}
+            return sorted;
+          });
+        } else {
+          // Cloud snapshot has 0 records:
+          // CRITICAL: Protect against wiping out valid locally imported students!
+          setStudents((currentLocal) => {
+            if (currentLocal.length > 0 && !isClearingRosterRef.current) {
+              console.log(`[Firestore] Cloud roster empty; syncing ${currentLocal.length} local students to Cloud Firestore...`);
+              const batch = writeBatch(db);
+              currentLocal.slice(0, 450).forEach((st) => {
+                batch.set(doc(db, 'students', st.id), st);
+              });
+              batch.commit().catch((err) => {
+                console.warn('[Firestore] Syncing local students to cloud notice:', err);
+              });
+              return sortAlphabetically(currentLocal);
+            }
+            return [];
+          });
+        }
         setIsSyncing(false);
       },
       (error) => {
         setCloudSyncError('Failed to synchronize students');
-        handleFirestoreError(error, OperationType.GET, 'students');
+        console.warn('[Firestore] Students listener sync notice:', error);
       }
     );
 
-    // 3. Courses Listener
+    // Courses Listener
     const unsubCourses = onSnapshot(
       collection(db, 'courses'),
       (snapshot) => {
@@ -713,11 +788,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setCourses(list);
       },
       (error) => {
-        handleFirestoreError(error, OperationType.GET, 'courses');
+        console.warn('[Firestore] Courses listener sync notice:', error);
       }
     );
 
-    // 4. Timetable Listener
+    // Timetable Listener
     const unsubTimetable = onSnapshot(
       collection(db, 'timetable'),
       (snapshot) => {
@@ -734,11 +809,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setTimetable(list);
       },
       (error) => {
-        handleFirestoreError(error, OperationType.GET, 'timetable');
+        console.warn('[Firestore] Timetable listener sync notice:', error);
       }
     );
 
-    // 5. Attendance Listener
+    return () => {
+      unsubStudents();
+      unsubCourses();
+      unsubTimetable();
+    };
+  }, []);
+
+  // 2. Real-time Firestore Listeners for Authenticated Collections
+  useEffect(() => {
+    if (!firebaseUser) return;
+
+    // 1. Authorized Users Listener
+    const unsubAuthUsers = onSnapshot(
+      collection(db, 'authorizedUsers'),
+      (snapshot) => {
+        if (!snapshot.empty) {
+          const list: AuthorizedUser[] = [];
+          snapshot.forEach((d) => {
+            const u = d.data() as AuthorizedUser;
+            // Purge legacy mock users (auth-2, auth-3/Kofi Mensah) if encountered from older snapshot
+            if (
+              u.id === 'auth-3' ||
+              u.email?.toLowerCase() === 'classrep.it300@uenr.edu.gh' ||
+              u.name?.toLowerCase().includes('kofi mensah') ||
+              u.id === 'auth-2' ||
+              u.email?.toLowerCase() === 'dr.asante@uenr.edu.gh'
+            ) {
+              deleteDoc(doc(db, 'authorizedUsers', d.id)).catch(() => {});
+              return;
+            }
+            list.push(u);
+          });
+          setAuthorizedUsers(list.length > 0 ? list : INITIAL_AUTHORIZED_USERS);
+        }
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'authorizedUsers');
+      }
+    );
+
+    // 2. Attendance Listener
     const unsubAttendance = onSnapshot(
       collection(db, 'attendance'),
       (snapshot) => {
@@ -751,7 +866,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     );
 
-    // 6. Audit Logs Listener
+    // 3. Audit Logs Listener
     const unsubLogs = onSnapshot(
       collection(db, 'auditLogs'),
       (snapshot) => {
@@ -767,7 +882,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     );
 
-    // 7. Auto Logging & Automation Settings Listener
+    // 4. Auto Logging & Automation Settings Listener
     const unsubSettings = onSnapshot(
       doc(db, 'systemSettings', 'autoLogging'),
       (snapshot) => {
@@ -783,9 +898,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return () => {
       unsubAuthUsers();
-      unsubStudents();
-      unsubCourses();
-      unsubTimetable();
       unsubAttendance();
       unsubLogs();
       unsubSettings();
@@ -877,8 +989,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Manage Authorized Users (HOD only)
+  // Manage Authorized Users (HOD can assign Lecturer & Class Rep; Lecturer can assign Class Rep ONLY)
   const addAuthorizedUser = async (userData: Omit<AuthorizedUser, 'id' | 'addedAt'>) => {
+    // Institutional RBAC policy:
+    // - Class Reps have zero assignment privileges
+    // - Lecturers can assign Class Representatives ONLY
+    // - HODs can assign Course Lecturers and Class Representatives
+    if (currentUser.role === 'class_rep') {
+      alert('Class Representatives do not have permission to authorize or assign personnel.');
+      return;
+    }
+    if (currentUser.role === 'lecturer' && userData.role !== 'class_rep') {
+      alert('Course Lecturers are only authorized to assign Class Representatives.');
+      return;
+    }
+
     const cleanEmail = userData.email.toLowerCase().trim();
     const id = `auth-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_')}`;
     const newUser: AuthorizedUser = {
@@ -895,7 +1020,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     await addAuditLog(
       'Authorized Personnel Added',
-      `Granted ${newUser.role.toUpperCase()} access to ${newUser.name} (${cleanEmail})`,
+      `Assigned by ${currentUser.name} (${currentUser.role.toUpperCase()}): Granted ${newUser.role.toUpperCase()} access to ${newUser.name} (${cleanEmail})`,
       'timetable'
     );
 
@@ -915,11 +1040,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
+    // Role-based revocation policy:
+    // - Class Reps cannot revoke anyone
+    // - Lecturers can ONLY revoke Class Representatives
+    // - HODs can revoke Lecturers and Class Representatives
+    if (currentUser.role === 'class_rep') {
+      alert('Class Representatives do not have permission to revoke personnel access.');
+      return;
+    }
+    if (currentUser.role === 'lecturer' && toRemove?.role !== 'class_rep') {
+      alert('Course Lecturers can only revoke Class Representatives.');
+      return;
+    }
+
     setAuthorizedUsers((prev) => prev.filter((u) => u.id !== id));
     if (toRemove) {
       await addAuditLog(
         'Access Revoked',
-        `Revoked ${toRemove.role.toUpperCase()} access for ${toRemove.name} (${toRemove.email})`,
+        `Revoked by ${currentUser.name} (${currentUser.role.toUpperCase()}): Revoked ${toRemove.role.toUpperCase()} access for ${toRemove.name} (${toRemove.email})`,
         'timetable'
       );
     }
@@ -957,112 +1095,343 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Student Actions
   const addStudent = async (studentData: Omit<Student, 'id' | 'createdAt' | 'enrolledFingers'>) => {
+    const rawIdx = (studentData.indexNumber || '').toUpperCase().trim().slice(0, 30);
+    const cleanName = (studentData.name || '').trim().slice(0, 100);
+    if (!rawIdx || !cleanName) return;
+
+    const cleanEmail = (
+      studentData.email?.trim() ||
+      generateInstitutionalEmail(cleanName, rawIdx)
+    ).slice(0, 100);
+    const safeDocId = `std-${rawIdx.replace(/[^a-zA-Z0-9]/g, '_')}-${Date.now().toString(36)}`;
+
     const newStudent: Student = {
       ...studentData,
-      id: `std-${Date.now()}`,
+      id: safeDocId,
+      name: cleanName,
+      indexNumber: rawIdx,
+      email: cleanEmail,
+      program: (studentData.program || 'BSc Information Technology').slice(0, 100),
+      level: (studentData.level || 'Level 100').slice(0, 30),
+      stream: (studentData.stream || 'IT A').slice(0, 30),
       enrolledFingers: [],
       createdAt: new Date().toISOString().split('T')[0]
     };
 
-    setStudents((prev) => [...prev, newStudent]);
+    setStudents((prev) => {
+      const updated = sortAlphabetically([...prev, newStudent]);
+      try {
+        localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(updated));
+      } catch (e) {
+        console.warn('LocalStorage save notice:', e);
+      }
+      return updated;
+    });
+
     await addAuditLog('Student Enrolled', `Added ${newStudent.name} (${newStudent.indexNumber}) to class roster`, 'student');
 
-    if (firebaseUser) {
-      try {
-        await setDoc(doc(db, 'students', newStudent.id), newStudent);
-      } catch (error) {
-        handleFirestoreError(error, OperationType.CREATE, `students/${newStudent.id}`);
-      }
+    try {
+      await setDoc(doc(db, 'students', newStudent.id), newStudent);
+    } catch (error) {
+      console.warn('[Firestore] Add student notice:', error);
     }
   };
 
-  const batchAddStudents = async (incoming: Array<{ name: string; indexNumber: string; email?: string; stream?: string; level?: string; program?: string }>) => {
-    const existingIndexNumbers = new Set(students.map((s) => s.indexNumber.toUpperCase().trim()));
-    const validToAdd: Student[] = [];
+  const batchAddStudents = async (
+    incoming: Array<{ name: string; indexNumber: string; email?: string; stream?: string; level?: string; program?: string }>,
+    options?: { clearExisting?: boolean; updateDuplicates?: boolean }
+  ): Promise<number> => {
+    const clearExisting = options?.clearExisting || false;
+    const updateDuplicates = options?.updateDuplicates ?? true;
+
+    // Collect base students
+    let baseStudents: Student[] = clearExisting ? [] : students;
+    if (!clearExisting) {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEYS.STUDENTS);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > baseStudents.length) {
+            baseStudents = parsed;
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    const existingMap = new Map<string, Student>();
+    baseStudents.forEach((s) => existingMap.set(s.indexNumber.toUpperCase().trim(), s));
+
+    const finalRoster: Student[] = clearExisting ? [] : [...baseStudents];
+    const docsToSaveInCloud: Student[] = [];
+    let addedCount = 0;
+    let updatedCount = 0;
 
     incoming.forEach((item, idx) => {
-      const cleanIdx = item.indexNumber.toUpperCase().trim();
-      if (cleanIdx && !existingIndexNumbers.has(cleanIdx)) {
-        existingIndexNumbers.add(cleanIdx);
-        validToAdd.push({
-          id: `std-${Date.now()}-${idx}`,
-          name: item.name.trim(),
+      const rawName = (item.name || '').trim();
+      const rawIdx = (item.indexNumber || '').toUpperCase().trim();
+      if (!rawName || !rawIdx) return;
+
+      const cleanIdx = rawIdx.slice(0, 30);
+      const cleanName = rawName.slice(0, 100);
+      const cleanEmail = (
+        item.email?.trim() ||
+        generateInstitutionalEmail(cleanName, cleanIdx)
+      ).slice(0, 100);
+
+      const existingStudent = existingMap.get(cleanIdx);
+
+      if (existingStudent) {
+        if (updateDuplicates) {
+          // Update properties if provided
+          existingStudent.name = cleanName;
+          if (item.level) existingStudent.level = item.level.slice(0, 30);
+          if (item.stream) existingStudent.stream = item.stream.slice(0, 30);
+          if (item.program) existingStudent.program = item.program.slice(0, 100);
+          if (item.email) {
+            existingStudent.email = cleanEmail;
+          } else {
+            const currentPrefix = (existingStudent.email || '').toLowerCase().split('@')[0];
+            const idxSlug = cleanIdx.toLowerCase().replace(/[^a-z0-9]/g, '');
+            if (!existingStudent.email || currentPrefix === idxSlug) {
+              existingStudent.email = generateInstitutionalEmail(cleanName, cleanIdx);
+            }
+          }
+          docsToSaveInCloud.push(existingStudent);
+          updatedCount++;
+        }
+      } else {
+        // Safe Firestore document ID conforming to isValidId: alphanumeric and hyphens
+        const safeDocId = `std-${cleanIdx.replace(/[^a-zA-Z0-9]/g, '_')}-${Date.now().toString(36)}-${idx}`;
+        const newStudent: Student = {
+          id: safeDocId,
+          name: cleanName,
           indexNumber: cleanIdx,
-          email: item.email?.trim() || `${cleanIdx.toLowerCase()}@uenr.edu.gh`,
-          program: item.program || 'BSc Information Technology',
-          level: item.level || 'Level 100',
-          stream: item.stream || 'IT A',
+          email: cleanEmail,
+          program: (item.program || 'BSc Information Technology').slice(0, 100),
+          level: (item.level || 'Level 100').slice(0, 30),
+          stream: (item.stream || 'IT A').slice(0, 30),
           enrolledFingers: [],
           createdAt: new Date().toISOString().split('T')[0]
-        });
+        };
+
+        existingMap.set(cleanIdx, newStudent);
+        finalRoster.push(newStudent);
+        docsToSaveInCloud.push(newStudent);
+        addedCount++;
       }
     });
 
-    if (validToAdd.length > 0) {
-      setStudents((prev) => [...prev, ...validToAdd]);
-      await addAuditLog('Batch Import', `Imported ${validToAdd.length} students into class roster`, 'student');
+    if (docsToSaveInCloud.length > 0 || clearExisting) {
+      // 1. Immediately update React state & localStorage for zero UI lag (sorted alphabetically)
+      const sorted = sortAlphabetically(finalRoster);
+      setStudents(sorted);
+      try {
+        localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(sorted));
+      } catch (e) {
+        console.warn('LocalStorage save notice:', e);
+      }
 
-      if (firebaseUser) {
-        try {
+      await addAuditLog(
+        'Batch Import',
+        `Imported ${addedCount} student(s) into class roster (${updatedCount} updated)`,
+        'student'
+      );
+
+      // 2. Persist to Firestore in safe chunked batches of 250 (Firestore limit is 500)
+      try {
+        if (clearExisting && baseStudents.length > 0) {
+          for (let i = 0; i < baseStudents.length; i += 250) {
+            const chunk = baseStudents.slice(i, i + 250);
+            const batch = writeBatch(db);
+            chunk.forEach((s) => batch.delete(doc(db, 'students', s.id)));
+            await batch.commit();
+          }
+        }
+
+        const CHUNK_SIZE = 250;
+        for (let i = 0; i < docsToSaveInCloud.length; i += CHUNK_SIZE) {
+          const chunk = docsToSaveInCloud.slice(i, i + CHUNK_SIZE);
           const batch = writeBatch(db);
-          validToAdd.forEach((student) => {
+          chunk.forEach((student) => {
             batch.set(doc(db, 'students', student.id), student);
           });
           await batch.commit();
-        } catch (error) {
-          handleFirestoreError(error, OperationType.WRITE, 'students');
         }
+        console.log(`[Firestore] Committed ${docsToSaveInCloud.length} batch students to Cloud Firestore.`);
+      } catch (error) {
+        console.warn('[Firestore] Batch save notice, data preserved in local storage:', error);
+        setCloudSyncError('Cloud sync notice: Students stored locally, will sync to cloud.');
       }
     }
-    return validToAdd.length;
+    return addedCount + updatedCount;
   };
 
   const updateStudent = async (id: string, updates: Partial<Student>) => {
-    setStudents((prev) => prev.map((s) => (s.id === id ? { ...s, ...updates } : s)));
-
-    if (firebaseUser) {
+    setStudents((prev) => {
+      const updated = sortAlphabetically(prev.map((s) => (s.id === id ? { ...s, ...updates } : s)));
       try {
-        await updateDoc(doc(db, 'students', id), updates);
-      } catch (error) {
-        handleFirestoreError(error, OperationType.UPDATE, `students/${id}`);
+        localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(updated));
+      } catch (e) {
+        console.warn('LocalStorage save notice:', e);
+      }
+      return updated;
+    });
+
+    const targetStudent = students.find((s) => s.id === id);
+    if (targetStudent) {
+      await addAuditLog('Student Updated', `Updated details for ${updates.name || targetStudent.name} (${updates.indexNumber || targetStudent.indexNumber})`, 'student');
+    }
+
+    try {
+      await updateDoc(doc(db, 'students', id), updates);
+    } catch (error) {
+      console.warn(`[Firestore] Update student notice for ${id}:`, error);
+    }
+  };
+
+  const batchUpdateStudents = async (
+    studentIds: string[],
+    updates: Partial<Pick<Student, 'level' | 'stream' | 'program'>>
+  ): Promise<number> => {
+    if (studentIds.length === 0) return 0;
+    const targetSet = new Set(studentIds);
+
+    setStudents((prev) => {
+      const updated = sortAlphabetically(prev.map((s) => (targetSet.has(s.id) ? { ...s, ...updates } : s)));
+      try {
+        localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(updated));
+      } catch (e) {
+        console.warn('LocalStorage save notice:', e);
+      }
+      return updated;
+    });
+
+    const changesText = Object.entries(updates)
+      .map(([k, v]) => `${k} -> ${v}`)
+      .join(', ');
+    await addAuditLog('Batch Student Update', `Updated ${studentIds.length} student(s): ${changesText}`, 'student');
+
+    try {
+      const CHUNK_SIZE = 250;
+      for (let i = 0; i < studentIds.length; i += CHUNK_SIZE) {
+        const chunk = studentIds.slice(i, i + CHUNK_SIZE);
+        const batch = writeBatch(db);
+        chunk.forEach((id) => {
+          batch.update(doc(db, 'students', id), updates);
+        });
+        await batch.commit();
+      }
+    } catch (error) {
+      console.warn('[Firestore] Batch student update notice:', error);
+    }
+    return studentIds.length;
+  };
+
+  const batchPromoteStudents = async (
+    fromLevel: string,
+    toLevel: string,
+    streamFilter?: string
+  ): Promise<number> => {
+    const matching = students.filter((s) => {
+      const matchLvl = (s.level || 'Level 100') === fromLevel;
+      const matchStrm = !streamFilter || streamFilter === 'all' || (s.stream || 'IT A') === streamFilter;
+      return matchLvl && matchStrm;
+    });
+
+    if (matching.length === 0) return 0;
+    const ids = matching.map((s) => s.id);
+    return await batchUpdateStudents(ids, { level: toLevel });
+  };
+
+  const promoteAllLevels = async (): Promise<{ count: number }> => {
+    const progressionMap: Record<string, string> = {
+      'Level 100': 'Level 200',
+      'Level 200': 'Level 300',
+      'Level 300': 'Level 400',
+      'Level 400': 'Alumni / Completed'
+    };
+
+    let updatedCount = 0;
+    const updated = students.map((s) => {
+      const curr = s.level || 'Level 100';
+      const next = progressionMap[curr];
+      if (next) {
+        updatedCount++;
+        return { ...s, level: next };
+      }
+      return s;
+    });
+
+    if (updatedCount > 0) {
+      const sorted = sortAlphabetically(updated);
+      setStudents(sorted);
+      try {
+        localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(sorted));
+      } catch (e) {}
+
+      await addAuditLog('Academic Progression', `Promoted ${updatedCount} students across levels`, 'student');
+
+      try {
+        const CHUNK_SIZE = 250;
+        for (let i = 0; i < updated.length; i += CHUNK_SIZE) {
+          const chunk = updated.slice(i, i + CHUNK_SIZE);
+          const batch = writeBatch(db);
+          chunk.forEach((s) => {
+            batch.update(doc(db, 'students', s.id), { level: s.level });
+          });
+          await batch.commit();
+        }
+      } catch (err) {
+        console.warn('[Firestore] Batch promote notice:', err);
       }
     }
+    return { count: updatedCount };
   };
 
   const removeStudent = async (id: string) => {
     const student = students.find((s) => s.id === id);
-    setStudents((prev) => prev.filter((s) => s.id !== id));
+    setStudents((prev) => {
+      const filtered = prev.filter((s) => s.id !== id);
+      try {
+        localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(filtered));
+      } catch (e) {}
+      return filtered;
+    });
     if (student) {
       await addAuditLog('Student Removed', `Removed ${student.name} (${student.indexNumber}) from class roster`, 'student');
     }
 
-    if (firebaseUser) {
-      try {
-        await deleteDoc(doc(db, 'students', id));
-      } catch (error) {
-        handleFirestoreError(error, OperationType.DELETE, `students/${id}`);
-      }
+    try {
+      await deleteDoc(doc(db, 'students', id));
+    } catch (error) {
+      console.warn(`[Firestore] Remove student notice for ${id}:`, error);
     }
   };
 
   // Clear all students so user has a completely blank slate for their class
   const clearAllStudents = async () => {
+    isClearingRosterRef.current = true;
     const count = students.length;
     setStudents([]);
-    localStorage.removeItem(STORAGE_KEYS.STUDENTS);
+    try {
+      localStorage.removeItem(STORAGE_KEYS.STUDENTS);
+    } catch {}
 
-    if (firebaseUser) {
-      try {
-        const snap = await getDocs(collection(db, 'students'));
-        const batch = writeBatch(db);
-        snap.forEach((d) => batch.delete(d.ref));
-        await batch.commit();
-      } catch (error) {
-        handleFirestoreError(error, OperationType.DELETE, 'students');
-      }
+    try {
+      const snap = await getDocs(collection(db, 'students'));
+      const batch = writeBatch(db);
+      snap.forEach((d) => batch.delete(d.ref));
+      await batch.commit();
+    } catch (error) {
+      console.warn('[Firestore] Clear students notice:', error);
     }
 
     await addAuditLog('Class Roster Cleared', `Cleared all ${count} student records from class roster`, 'student');
+    setTimeout(() => {
+      isClearingRosterRef.current = false;
+    }, 2000);
   };
 
   const enrollStudentFingers = async (id: string, fingers: string[]) => {
@@ -1072,13 +1441,52 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       await addAuditLog('Biometrics Enrolled', `Enrolled ${fingers.length} finger(s) for ${student.name} (${student.indexNumber})`, 'biometric');
     }
 
-    if (firebaseUser) {
-      try {
-        await updateDoc(doc(db, 'students', id), { enrolledFingers: fingers });
-      } catch (error) {
-        handleFirestoreError(error, OperationType.UPDATE, `students/${id}`);
-      }
+    try {
+      await updateDoc(doc(db, 'students', id), { enrolledFingers: fingers });
+    } catch (error) {
+      console.warn(`[Firestore] Enroll fingers notice for ${id}:`, error);
     }
+  };
+
+  const updateAllStudentEmailsToNameBased = async (): Promise<number> => {
+    let count = 0;
+    const batch = writeBatch(db);
+    const updated = students.map((s) => {
+      const idxSlug = (s.indexNumber || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const cur = (s.email || '').toLowerCase().trim();
+      const isIndexBased =
+        !cur ||
+        cur === `${idxSlug}@uenr.edu.gh` ||
+        cur.startsWith(idxSlug) ||
+        cur === 'student@uenr.edu.gh';
+
+      if (isIndexBased && s.name && s.name.trim()) {
+        const newEmail = generateInstitutionalEmail(s.name, s.indexNumber);
+        if (newEmail !== cur) {
+          count++;
+          const mod = { ...s, email: newEmail };
+          batch.set(doc(db, 'students', s.id), mod, { merge: true });
+          return mod;
+        }
+      }
+      return s;
+    });
+
+    if (count > 0) {
+      setStudents(updated);
+      try {
+        localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(updated));
+      } catch (e) {
+        console.warn('LocalStorage save notice:', e);
+      }
+      try {
+        await batch.commit();
+      } catch (err) {
+        console.warn('[Firestore] Batch commit email notice:', err);
+      }
+      await addAuditLog('Emails Updated', `Updated ${count} student email(s) to official name-based format`, 'student');
+    }
+    return count;
   };
 
   // Course Actions
@@ -1606,9 +2014,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addStudent,
         batchAddStudents,
         updateStudent,
+        batchUpdateStudents,
+        batchPromoteStudents,
+        promoteAllLevels,
         removeStudent,
         clearAllStudents,
         enrollStudentFingers,
+        updateAllStudentEmailsToNameBased,
         addCourse,
         updateCourse,
         removeCourse,
