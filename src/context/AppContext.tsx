@@ -206,14 +206,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (saved) {
         const parsed: AuthorizedUser[] = JSON.parse(saved);
         // Ensure legacy mock entries (auth-2, auth-3/Kofi Mensah) are completely purged
-        const cleaned = parsed.filter(
-          (u) =>
-            u.id !== 'auth-2' &&
-            u.id !== 'auth-3' &&
-            u.email.toLowerCase() !== 'dr.asante@uenr.edu.gh' &&
-            u.email.toLowerCase() !== 'classrep.it300@uenr.edu.gh' &&
-            !u.name.toLowerCase().includes('kofi mensah')
-        );
+        const cleaned = parsed
+          .map((u) => {
+            if (u.name === 'Dr. Jones Darko' || u.email.toLowerCase() === MASTER_HOD_EMAIL.toLowerCase()) {
+              return { ...u, name: 'Jones Darko' };
+            }
+            return u;
+          })
+          .filter(
+            (u) =>
+              u.id !== 'auth-2' &&
+              u.id !== 'auth-3' &&
+              u.email.toLowerCase() !== 'dr.asante@uenr.edu.gh' &&
+              u.email.toLowerCase() !== 'classrep.it300@uenr.edu.gh' &&
+              !u.name.toLowerCase().includes('kofi mensah')
+          );
         return cleaned.length > 0 ? cleaned : INITIAL_AUTHORIZED_USERS;
       }
       return INITIAL_AUTHORIZED_USERS;
@@ -237,13 +244,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const saved = localStorage.getItem('uenr_current_user_profile');
       if (saved) {
-        return JSON.parse(saved);
+        const parsed: CurrentUser = JSON.parse(saved);
+        if (parsed.name === 'Dr. Jones Darko' || parsed.email?.toLowerCase() === MASTER_HOD_EMAIL.toLowerCase()) {
+          parsed.name = 'Jones Darko';
+        }
+        return parsed;
       }
     } catch {
       // ignore
     }
     return {
-      name: 'Dr. Jones Darko',
+      name: 'Jones Darko',
       email: MASTER_HOD_EMAIL,
       role: 'hod',
       department: 'Department of Information Technology'
@@ -673,10 +684,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             determinedRole = matchedAuthorized.role;
           }
 
-          const determinedName =
-            user.displayName ||
-            matchedAuthorized?.name ||
-            (userEmail ? userEmail.split('@')[0] : 'Academic Staff');
+          let determinedName =
+            isMasterHod || userEmail === MASTER_HOD_EMAIL.toLowerCase()
+              ? 'Jones Darko'
+              : (user.displayName ||
+                matchedAuthorized?.name ||
+                (userEmail ? userEmail.split('@')[0] : 'Academic Staff'));
+
+          if (determinedName === 'Dr. Jones Darko') {
+            determinedName = 'Jones Darko';
+          }
 
           setCurrentUser({
             name: determinedName,
@@ -693,7 +710,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } else {
         // Fallback default
         setCurrentUser({
-          name: 'Dr. Jones Darko',
+          name: 'Jones Darko',
           email: MASTER_HOD_EMAIL,
           role: 'hod',
           department: 'Department of Information Technology'
@@ -919,7 +936,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const autoSignInAsMaster = useCallback(() => {
     const masterProfile: CurrentUser = {
-      name: 'Dr. Jones Darko',
+      name: 'Jones Darko',
       email: MASTER_HOD_EMAIL,
       role: 'hod',
       department: 'Department of Information Technology'

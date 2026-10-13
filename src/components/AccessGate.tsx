@@ -82,7 +82,7 @@ export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }
                     Instant Auto Sign-In
                   </h3>
                   <p className="text-[11px] text-emerald-800 leading-relaxed mt-0.5">
-                    Launch directly into the portal as <strong>Dr. Jones Darko (HOD)</strong> without selecting or prompting for Gmail.
+                    Launch directly into the portal as <strong>Jones Darko (HOD)</strong> without selecting or prompting for Gmail.
                   </p>
                 </div>
               </div>

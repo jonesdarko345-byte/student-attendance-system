@@ -18,7 +18,7 @@ export const INITIAL_AUTHORIZED_USERS: AuthorizedUser[] = [
   {
     id: 'auth-1',
     email: 'jonesdarko345@gmail.com',
-    name: 'Dr. Jones Darko',
+    name: 'Jones Darko',
     role: 'hod',
     department: 'Department of Information Technology',
     addedAt: '2025-01-10'

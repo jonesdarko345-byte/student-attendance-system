@@ -27,7 +27,7 @@ export const Footer: React.FC = () => {
               <p className="text-slate-500 dark:text-slate-400 font-medium">
                 &copy; {currentYear} All rights reserved. Developed by{' '}
                 <span className="font-semibold text-[#007c82] dark:text-teal-400">
-                  Dr. Jones Darko
+                  Jones Darko
                 </span>
               </p>
             </div>
@@ -129,7 +129,7 @@ export const Footer: React.FC = () => {
                     Author & Proprietary Licensor
                   </span>
                   <p className="font-bold text-slate-900 dark:text-slate-100 text-sm">
-                    Dr. Jones Darko
+                    Jones Darko
                   </p>
                   <p className="text-slate-500 dark:text-slate-400 text-[11px]">
                     Department of Information Technology
@@ -175,7 +175,7 @@ export const Footer: React.FC = () => {
                 </h4>
                 <ul className="list-disc pl-5 space-y-1 text-slate-500 dark:text-slate-400">
                   <li>
-                    <strong>All Rights Reserved:</strong> All source code, interfaces, algorithms, and design assets remain the exclusive intellectual property of <strong>Dr. Jones Darko</strong>.
+                    <strong>All Rights Reserved:</strong> All source code, interfaces, algorithms, and design assets remain the exclusive intellectual property of <strong>Jones Darko</strong>.
                   </li>
                   <li>
                     <strong>No Redistribution or Resale:</strong> The software may not be copied, modified, reverse-engineered, sublicensed, or redistributed to third parties without prior written consent from the author.
