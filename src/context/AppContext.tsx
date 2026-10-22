@@ -127,6 +127,7 @@ interface AppContextType {
   batchPromoteStudents: (fromLevel: string, toLevel: string, streamFilter?: string) => Promise<number>;
   promoteAllLevels: () => Promise<{ count: number }>;
   removeStudent: (id: string) => Promise<void>;
+  deleteStudentsByFilter: (filter: { level?: string; stream?: string; ids?: string[] }) => Promise<number>;
   clearAllStudents: () => Promise<void>;
   enrollStudentFingers: (id: string, fingers: string[]) => Promise<void>;
   updateAllStudentEmailsToNameBased: () => Promise<number>;
@@ -1427,6 +1428,57 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // Delete students specifically by Level, Stream, or an array of student IDs
+  const deleteStudentsByFilter = async (filter: { level?: string; stream?: string; ids?: string[] }): Promise<number> => {
+    let toDeleteIds: string[] = [];
+    if (filter.ids && filter.ids.length > 0) {
+      toDeleteIds = filter.ids;
+    } else {
+      toDeleteIds = students
+        .filter((s) => {
+          const matchLevel = !filter.level || filter.level === 'all' || (s.level || 'Level 100') === filter.level;
+          const matchStream = !filter.stream || filter.stream === 'all' || (s.stream || 'IT A') === filter.stream;
+          return matchLevel && matchStream;
+        })
+        .map((s) => s.id);
+    }
+
+    if (toDeleteIds.length === 0) return 0;
+
+    const count = toDeleteIds.length;
+    const deleteSet = new Set(toDeleteIds);
+    setStudents((prev) => {
+      const remaining = prev.filter((s) => !deleteSet.has(s.id));
+      try {
+        localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(remaining));
+      } catch (e) {}
+      return remaining;
+    });
+
+    const descParts: string[] = [];
+    if (filter.level && filter.level !== 'all') descParts.push(filter.level);
+    if (filter.stream && filter.stream !== 'all') descParts.push(filter.stream);
+    const scopeDesc = descParts.length > 0 ? descParts.join(' ') : `${count} students`;
+
+    await addAuditLog('Cohort Purged', `Deleted ${count} student records in ${scopeDesc}`, 'student');
+
+    try {
+      const CHUNK_SIZE = 250;
+      for (let i = 0; i < toDeleteIds.length; i += CHUNK_SIZE) {
+        const chunk = toDeleteIds.slice(i, i + CHUNK_SIZE);
+        const batch = writeBatch(db);
+        chunk.forEach((id) => {
+          batch.delete(doc(db, 'students', id));
+        });
+        await batch.commit();
+      }
+    } catch (error) {
+      console.warn('[Firestore] Batch delete error:', error);
+    }
+
+    return count;
+  };
+
   // Clear all students so user has a completely blank slate for their class
   const clearAllStudents = async () => {
     isClearingRosterRef.current = true;
@@ -2035,6 +2087,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         batchPromoteStudents,
         promoteAllLevels,
         removeStudent,
+        deleteStudentsByFilter,
         clearAllStudents,
         enrollStudentFingers,
         updateAllStudentEmailsToNameBased,

@@ -54,6 +54,7 @@ export const Admin: React.FC = () => {
     batchPromoteStudents,
     promoteAllLevels,
     removeStudent,
+    deleteStudentsByFilter,
     clearAllStudents,
     updateAllStudentEmailsToNameBased,
     authorizedUsers,
@@ -62,8 +63,16 @@ export const Admin: React.FC = () => {
     setAdminSubTab
   } = useApp();
 
+  // Delete Specific Cohort / Level / Stream Modal
+  const [showDeleteCohortModal, setShowDeleteCohortModal] = useState<boolean>(false);
+  const [deleteTargetType, setDeleteTargetType] = useState<'level' | 'stream' | 'both'>('level');
+  const [targetDeleteLevel, setTargetDeleteLevel] = useState<string>('Level 100');
+  const [targetDeleteStream, setTargetDeleteStream] = useState<string>('IT A');
+  const [isDeletingCohort, setIsDeletingCohort] = useState<boolean>(false);
+
   const [selectedStudentForBio, setSelectedStudentForBio] = useState<Student | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [selectedLevelFilter, setSelectedLevelFilter] = useState<string>('all');
   const [selectedStreamFilter, setSelectedStreamFilter] = useState<string>('all');
   const [sortBy, setSortBy] = useState<StudentSortOption>('name-asc');
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
@@ -184,13 +193,30 @@ export const Admin: React.FC = () => {
     });
   }, [batchRecords, batchSearchQuery, batchFilterStream, batchFilterLevel]);
 
-  // Dynamic streams collection
-  const availableStreams = Array.from(
-    new Set([
-      ...DEFAULT_STREAMS,
-      ...students.map((s) => s.stream).filter((st): st is string => Boolean(st))
-    ])
-  );
+  // Dynamic Academic Levels & Streams collection
+  const DEFAULT_LEVELS = ['Level 100', 'Level 200', 'Level 300', 'Level 400'] as const;
+
+  const availableLevels = useMemo(() => {
+    const set = new Set<string>(DEFAULT_LEVELS);
+    students.forEach((s) => {
+      if (s.level) set.add(s.level);
+    });
+    return Array.from(set).sort((a, b) => {
+      const numA = parseInt(a.replace(/\D/g, '') || '0', 10);
+      const numB = parseInt(b.replace(/\D/g, '') || '0', 10);
+      if (numA && numB) return numA - numB;
+      return a.localeCompare(b);
+    });
+  }, [students]);
+
+  const availableStreams = useMemo(() => {
+    return Array.from(
+      new Set([
+        ...DEFAULT_STREAMS,
+        ...students.map((s) => s.stream).filter((st): st is string => Boolean(st))
+      ])
+    ).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  }, [students]);
 
   // If enrolling biometrics for a student, render BiometricEnrollment view
   if (selectedStudentForBio) {
@@ -1138,22 +1164,37 @@ export const Admin: React.FC = () => {
     }
   };
 
-  // Sorting and filtering (alphabetical by default!)
+  // Helper to extract numeric level for consistent level ordering (100 -> 200 -> 300 -> 400)
+  const extractLevelNumber = (lvl?: string) => {
+    if (!lvl) return 100;
+    const match = lvl.match(/\d+/);
+    return match ? parseInt(match[0], 10) : 999;
+  };
+
+  // Sorting and filtering: Strictly sort first by Level, then by Stream, then by name/index
   const sortedAndFilteredStudents = useMemo(() => {
     const filtered = students.filter((s) => {
       const matchesSearch =
         s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         s.indexNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
         s.email.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesLevel =
+        selectedLevelFilter === 'all' || (s.level || 'Level 100') === selectedLevelFilter;
       const matchesStream =
         selectedStreamFilter === 'all' || (s.stream || 'IT A') === selectedStreamFilter;
-      return matchesSearch && matchesStream;
+      return matchesSearch && matchesLevel && matchesStream;
     });
 
     return [...filtered].sort((a, b) => {
-      if (sortBy === 'name-asc') {
-        return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
-      }
+      // 1. PRIMARY SORT: Always sort by Academic Level first (Level 100 before Level 200, etc.)
+      const levelDiff = extractLevelNumber(a.level) - extractLevelNumber(b.level);
+      if (levelDiff !== 0) return levelDiff;
+
+      // 2. SECONDARY SORT: Always sort by Stream (IT A before IT B, etc.)
+      const streamDiff = (a.stream || 'IT A').localeCompare(b.stream || 'IT A', undefined, { numeric: true });
+      if (streamDiff !== 0) return streamDiff;
+
+      // 3. TERTIARY SORT: User-selected sorting within the same Level & Stream
       if (sortBy === 'name-desc') {
         return b.name.localeCompare(a.name, undefined, { sensitivity: 'base' });
       }
@@ -1163,12 +1204,10 @@ export const Admin: React.FC = () => {
       if (sortBy === 'index-desc') {
         return b.indexNumber.localeCompare(a.indexNumber, undefined, { numeric: true });
       }
-      if (sortBy === 'level-asc') {
-        return (a.level || 'Level 100').localeCompare(b.level || 'Level 100');
-      }
-      return 0;
+      // default: 'name-asc' or 'level-asc'
+      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
     });
-  }, [students, searchQuery, selectedStreamFilter, sortBy]);
+  }, [students, searchQuery, selectedLevelFilter, selectedStreamFilter, sortBy]);
 
   // Multi-selection helpers
   const isAllSelected =
@@ -1220,6 +1259,57 @@ export const Admin: React.FC = () => {
       }
       setSelectedStudentIds([]);
     }
+  };
+
+  const openDeleteForCohort = (lvl?: string, st?: string) => {
+    if (lvl && st && lvl !== 'all' && st !== 'all') {
+      setDeleteTargetType('both');
+      setTargetDeleteLevel(lvl);
+      setTargetDeleteStream(st);
+    } else if (lvl && lvl !== 'all' && (!st || st === 'all')) {
+      setDeleteTargetType('level');
+      setTargetDeleteLevel(lvl);
+    } else if (st && st !== 'all' && (!lvl || lvl === 'all')) {
+      setDeleteTargetType('stream');
+      setTargetDeleteStream(st);
+    } else {
+      setDeleteTargetType('level');
+      setTargetDeleteLevel(availableLevels[0] || 'Level 100');
+    }
+    setShowDeleteCohortModal(true);
+  };
+
+  const studentsPendingDelete = useMemo(() => {
+    if (!showDeleteCohortModal) return [];
+    return students.filter((s) => {
+      if (deleteTargetType === 'level') {
+        return (s.level || 'Level 100') === targetDeleteLevel;
+      }
+      if (deleteTargetType === 'stream') {
+        return (s.stream || 'IT A') === targetDeleteStream;
+      }
+      return (s.level || 'Level 100') === targetDeleteLevel && (s.stream || 'IT A') === targetDeleteStream;
+    });
+  }, [students, showDeleteCohortModal, deleteTargetType, targetDeleteLevel, targetDeleteStream]);
+
+  const handleExecuteDeleteCohort = async () => {
+    if (studentsPendingDelete.length === 0) return;
+    const count = studentsPendingDelete.length;
+    const label =
+      deleteTargetType === 'level'
+        ? targetDeleteLevel
+        : deleteTargetType === 'stream'
+        ? `Stream ${targetDeleteStream}`
+        : `${targetDeleteLevel} (${targetDeleteStream})`;
+
+    setIsDeletingCohort(true);
+    await deleteStudentsByFilter({
+      level: deleteTargetType === 'level' || deleteTargetType === 'both' ? targetDeleteLevel : undefined,
+      stream: deleteTargetType === 'stream' || deleteTargetType === 'both' ? targetDeleteStream : undefined
+    });
+    setIsDeletingCohort(false);
+    setShowDeleteCohortModal(false);
+    setToastMessage(`Successfully deleted all ${count} students in ${label}. Other cohorts remain untouched.`);
   };
 
   // Cohort breakdown counts
@@ -1373,11 +1463,20 @@ export const Admin: React.FC = () => {
 
                   <button
                     onClick={handleClearAll}
-                    className="px-3 py-2 rounded-xl bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5"
+                    className="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-300 border border-slate-200 dark:border-slate-700 hover:border-rose-300 text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5"
                     title="Clear all students"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                     <span>Clear All</span>
+                  </button>
+
+                  <button
+                    onClick={() => openDeleteForCohort(selectedLevelFilter !== 'all' ? selectedLevelFilter : 'Level 100', selectedStreamFilter !== 'all' ? selectedStreamFilter : undefined)}
+                    className="px-3.5 py-2 rounded-xl bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-300 dark:border-slate-700 hover:border-slate-400 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-sm"
+                    title="Delete a specific academic level or stream alone at once without affecting others"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-[#007c82] dark:text-teal-400" />
+                    <span>Delete Level / Stream</span>
                   </button>
 
                   <button
@@ -1454,42 +1553,139 @@ export const Admin: React.FC = () => {
           ) : (
             <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 overflow-hidden">
               
-              {/* Stream Navigation Tabs */}
-              <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-100/70 dark:bg-slate-850 flex items-center gap-2 overflow-x-auto">
-                <div className="flex items-center gap-1.5 text-xs font-bold text-slate-500 dark:text-slate-400 mr-2 flex-shrink-0">
-                  <Layers className="w-3.5 h-3.5 text-[#007c82] dark:text-teal-400" />
-                  <span>Divisions:</span>
+              {/* Hierarchical Student Divisions: Levels First, Then Streams */}
+              <div className="border-b border-slate-200 dark:border-slate-800 bg-slate-100/80 dark:bg-slate-850 divide-y divide-slate-200/70 dark:divide-slate-800">
+                {/* 1. Academic Level Divisions (Primary Division: 100, 200, 300, 400) */}
+                <div className="px-4 py-2.5 flex items-center gap-2 overflow-x-auto scrollbar-none">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-600 dark:text-slate-300 mr-1 shrink-0">
+                    <GraduationCap className="w-4 h-4 text-[#003b5c] dark:text-teal-400" />
+                    <span>Academic Levels:</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedLevelFilter('all')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                      selectedLevelFilter === 'all'
+                        ? 'bg-[#003b5c] text-white shadow-sm ring-1 ring-[#002840]'
+                        : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700'
+                    }`}
+                  >
+                    All Levels ({students.length})
+                  </button>
+                  {availableLevels.map((lvl) => {
+                    const count = students.filter((s) => (s.level || 'Level 100') === lvl).length;
+                    const isActive = selectedLevelFilter === lvl;
+                    return (
+                      <button
+                        key={lvl}
+                        type="button"
+                        onClick={() => setSelectedLevelFilter(lvl)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer flex items-center gap-1.5 ${
+                          isActive
+                            ? 'bg-[#003b5c] text-white shadow-sm ring-1 ring-[#002840]'
+                            : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700'
+                        }`}
+                      >
+                        <span>{lvl}</span>
+                        <span
+                          className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                            isActive
+                              ? 'bg-white/20 text-white'
+                              : 'bg-teal-50 dark:bg-teal-950/60 text-[#007c82] dark:text-teal-300'
+                          }`}
+                        >
+                          {count}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
-                <button
-                  onClick={() => setSelectedStreamFilter('all')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
-                    selectedStreamFilter === 'all'
-                      ? 'bg-[#007c82] text-white shadow-sm'
-                      : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700'
-                  }`}
-                >
-                  All Streams ({students.length})
-                </button>
-                {availableStreams.map((st) => {
-                  const count = students.filter((s) => (s.stream || 'IT A') === st).length;
-                  const isActive = selectedStreamFilter === st;
-                  return (
-                    <button
-                      key={st}
-                      onClick={() => setSelectedStreamFilter(st)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer flex items-center gap-1.5 ${
-                        isActive
-                          ? 'bg-[#003b5c] text-white shadow-sm'
-                          : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700'
-                      }`}
-                    >
-                      <span>{st}</span>
-                      <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${isActive ? 'bg-white/20 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300'}`}>
-                        {count}
-                      </span>
-                    </button>
-                  );
-                })}
+
+                {/* 2. Stream / Division Tabs (Secondary Division: A, B, C, etc., Scoped by Level) */}
+                <div className="px-4 py-2.5 flex items-center gap-2 overflow-x-auto scrollbar-none bg-slate-50/60 dark:bg-slate-900/40">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-600 dark:text-slate-300 mr-1 shrink-0">
+                    <Layers className="w-4 h-4 text-[#007c82] dark:text-teal-400" />
+                    <span>Class Streams:</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedStreamFilter('all')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                      selectedStreamFilter === 'all'
+                        ? 'bg-[#007c82] text-white shadow-sm ring-1 ring-teal-700/20'
+                        : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700'
+                    }`}
+                  >
+                    All Streams ({
+                      selectedLevelFilter === 'all'
+                        ? students.length
+                        : students.filter((s) => (s.level || 'Level 100') === selectedLevelFilter).length
+                    })
+                  </button>
+                  {availableStreams.map((st) => {
+                    const count = students.filter((s) => {
+                      const matchesLevel =
+                        selectedLevelFilter === 'all' || (s.level || 'Level 100') === selectedLevelFilter;
+                      return matchesLevel && (s.stream || 'IT A') === st;
+                    }).length;
+                    const isActive = selectedStreamFilter === st;
+                    return (
+                      <button
+                        key={st}
+                        type="button"
+                        onClick={() => setSelectedStreamFilter(st)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer flex items-center gap-1.5 ${
+                          isActive
+                            ? 'bg-[#007c82] text-white shadow-sm ring-1 ring-teal-800'
+                            : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700'
+                        }`}
+                      >
+                        <span>
+                          {selectedLevelFilter !== 'all' ? `${selectedLevelFilter.replace('Level ', 'L')} - ${st}` : st}
+                        </span>
+                        <span
+                          className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                            isActive
+                              ? 'bg-white/20 text-white'
+                              : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
+                          }`}
+                        >
+                          {count}
+                        </span>
+                      </button>
+                    );
+                  })}
+
+                  {(selectedLevelFilter !== 'all' || selectedStreamFilter !== 'all') && (
+                    <div className="ml-auto flex items-center gap-2 pl-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => openDeleteForCohort(
+                          selectedLevelFilter !== 'all' ? selectedLevelFilter : undefined,
+                          selectedStreamFilter !== 'all' ? selectedStreamFilter : undefined
+                        )}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-rose-950/50 hover:text-rose-600 dark:hover:text-rose-300 border border-slate-200 dark:border-slate-700 hover:border-rose-300 transition-colors shadow-xs cursor-pointer"
+                        title="Delete only this currently selected division or level"
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-[#007c82] dark:text-teal-400" />
+                        <span>
+                          Delete This {selectedLevelFilter !== 'all' && selectedStreamFilter !== 'all' ? `${selectedLevelFilter.replace('Level ', 'L')} ${selectedStreamFilter}` : selectedLevelFilter !== 'all' ? selectedLevelFilter : selectedStreamFilter}
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedLevelFilter('all');
+                          setSelectedStreamFilter('all');
+                        }}
+                        className="text-[11px] font-bold text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 underline cursor-pointer whitespace-nowrap"
+                      >
+                        Reset Filters
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Filter and Sorting Toolbar */}
@@ -1528,9 +1724,9 @@ export const Admin: React.FC = () => {
                   <div className="text-slate-500 dark:text-slate-400">
                     Showing <strong className="text-slate-800 dark:text-slate-200">{sortedAndFilteredStudents.length}</strong> of{' '}
                     <strong className="text-slate-800 dark:text-slate-200">{students.length}</strong> students
-                    {selectedStreamFilter !== 'all' && (
+                    {(selectedLevelFilter !== 'all' || selectedStreamFilter !== 'all') && (
                       <span className="ml-1 text-[#007c82] dark:text-teal-400 font-bold">
-                        ({selectedStreamFilter})
+                        ({selectedLevelFilter !== 'all' ? selectedLevelFilter : 'All Levels'} · {selectedStreamFilter !== 'all' ? selectedStreamFilter : 'All Streams'})
                       </span>
                     )}
                   </div>
@@ -1543,102 +1739,149 @@ export const Admin: React.FC = () => {
               <div className="block md:hidden divide-y divide-slate-100 dark:divide-slate-800">
                 {sortedAndFilteredStudents.length === 0 ? (
                   <div className="py-12 px-4 text-center text-slate-400 dark:text-slate-500 text-xs">
-                    No matching students found for &quot;{searchQuery}&quot;{selectedStreamFilter !== 'all' ? ` in ${selectedStreamFilter}` : ''}.
+                    No matching students found for &quot;{searchQuery}&quot;
+                    {selectedLevelFilter !== 'all' ? ` in ${selectedLevelFilter}` : ''}
+                    {selectedStreamFilter !== 'all' ? ` (Stream ${selectedStreamFilter})` : ''}.
                   </div>
                 ) : (
                   sortedAndFilteredStudents.map((student, idx) => {
                     const fingerCount = student.enrolledFingers?.length || 0;
                     const isSelected = selectedStudentIds.includes(student.id);
 
+                    const currentCohortLevel = student.level || 'Level 100';
+                    const currentCohortStream = student.stream || 'IT A';
+                    const prevStudent = idx > 0 ? sortedAndFilteredStudents[idx - 1] : null;
+                    const isNewCohort =
+                      !prevStudent ||
+                      (prevStudent.level || 'Level 100') !== currentCohortLevel ||
+                      (prevStudent.stream || 'IT A') !== currentCohortStream;
+                    const cohortCount = sortedAndFilteredStudents.filter(
+                      (s) =>
+                        (s.level || 'Level 100') === currentCohortLevel &&
+                        (s.stream || 'IT A') === currentCohortStream
+                    ).length;
+
                     return (
-                      <div
-                        key={student.id}
-                        className="p-4 space-y-3 transition-colors bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs"
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className="font-mono text-[11px] text-slate-400 dark:text-slate-500 font-semibold">
-                                #{idx + 1}
-                              </span>
-                              <span className="font-bold text-sm text-slate-900 dark:text-white truncate">
-                                {student.name}
-                              </span>
+                      <React.Fragment key={student.id}>
+                        {isNewCohort && (
+                          <div className="pt-3 pb-1 px-1">
+                            <div className="p-3 bg-gradient-to-r from-slate-100 to-slate-50 dark:from-slate-800 dark:to-slate-850 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-between shadow-xs">
+                              <div className="flex items-center gap-2">
+                                <GraduationCap className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                                <span className="font-extrabold text-xs text-slate-900 dark:text-white">
+                                  {currentCohortLevel}
+                                </span>
+                                <span className="text-slate-300 dark:text-slate-600">·</span>
+                                <span className="px-2 py-0.5 rounded-md bg-[#003b5c] text-white text-[10px] font-black font-mono">
+                                  Division {currentCohortStream}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">
+                                  {cohortCount} student{cohortCount === 1 ? '' : 's'}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => openDeleteForCohort(currentCohortLevel, currentCohortStream)}
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/60 hover:bg-rose-100 border border-rose-200 dark:border-rose-800"
+                                  title={`Delete all ${cohortCount} students in ${currentCohortLevel} ${currentCohortStream}`}
+                                >
+                                  <Trash2 className="w-3 h-3 text-rose-600 dark:text-rose-400" />
+                                  <span>Delete</span>
+                                </button>
+                              </div>
                             </div>
-                            <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                              <span>{student.program}</span>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            {/* Level Badge */}
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 text-[11px] font-bold font-mono">
-                              {student.level || 'Level 100'}
-                            </span>
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-teal-50 dark:bg-teal-950/60 text-[#007c82] dark:text-teal-300 border border-teal-200 dark:border-teal-800 text-[11px] font-black font-mono">
-                              {student.stream || 'IT A'}
-                            </span>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center justify-between gap-2 text-xs">
-                          <span className="font-mono font-bold text-slate-700 dark:text-slate-300">
-                            {student.indexNumber}
-                          </span>
-
-                          <div>
-                            {fingerCount > 0 ? (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-[11px] font-bold">
-                                <CheckCircle2 className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
-                                {fingerCount}/10 Fingers Enrolled
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 text-[11px] font-medium">
-                                <AlertCircle className="w-3 h-3 text-amber-600 dark:text-amber-400" />
-                                Not Enrolled
-                              </span>
-                            )}
-                          </div>
-                        </div>
-
-                        {student.email && (
-                          <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                            {student.email}
                           </div>
                         )}
 
-                        {/* Touch-Friendly Action Buttons */}
-                        <div className="flex items-center gap-2 pt-1">
-                          <button
-                            type="button"
-                            onClick={() => openEditStudent(student)}
-                            className="h-11 px-3 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer active:scale-95"
-                            title="Edit Student Information & Level"
-                          >
-                            <Edit2 className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
-                            <span>Edit</span>
-                          </button>
+                        <div
+                          className="p-4 space-y-3 transition-colors bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="font-mono text-[11px] text-slate-400 dark:text-slate-500 font-semibold">
+                                  #{idx + 1}
+                                </span>
+                                <span className="font-bold text-sm text-slate-900 dark:text-white truncate">
+                                  {student.name}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                                <span>{student.program}</span>
+                              </div>
+                            </div>
 
-                          <button
-                            type="button"
-                            onClick={() => setSelectedStudentForBio(student)}
-                            className="flex-1 h-11 rounded-xl bg-teal-50 dark:bg-teal-950/40 hover:bg-teal-100 dark:hover:bg-teal-900/60 text-[#007c82] dark:text-teal-400 border border-teal-200 dark:border-teal-800 text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-98"
-                          >
-                            <Fingerprint className="w-4 h-4 text-[#007c82] dark:text-teal-400" />
-                            <span>{fingerCount > 0 ? 'Edit Biometrics' : 'Enroll Biometrics'}</span>
-                          </button>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {/* Level Badge */}
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 text-[11px] font-bold font-mono">
+                                {student.level || 'Level 100'}
+                              </span>
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-teal-50 dark:bg-teal-950/60 text-[#007c82] dark:text-teal-300 border border-teal-200 dark:border-teal-800 text-[11px] font-black font-mono">
+                                {student.stream || 'IT A'}
+                              </span>
+                            </div>
+                          </div>
 
-                          <button
-                            type="button"
-                            onClick={() => handleDelete(student)}
-                            className="h-11 px-3 rounded-xl text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 border border-rose-200 dark:border-rose-800 transition-all flex items-center justify-center cursor-pointer active:scale-95"
-                            title="Remove Student"
-                            aria-label={`Remove ${student.name}`}
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          <div className="flex items-center justify-between gap-2 text-xs">
+                            <span className="font-mono font-bold text-slate-700 dark:text-slate-300">
+                              {student.indexNumber}
+                            </span>
+
+                            <div>
+                              {fingerCount > 0 ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-[11px] font-bold">
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                                  {fingerCount}/10 Fingers Enrolled
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 text-[11px] font-medium">
+                                  <AlertCircle className="w-3 h-3 text-amber-600 dark:text-amber-400" />
+                                  Not Enrolled
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {student.email && (
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                              {student.email}
+                            </div>
+                          )}
+
+                          {/* Touch-Friendly Action Buttons */}
+                          <div className="flex items-center gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={() => openEditStudent(student)}
+                              className="h-11 px-3 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer active:scale-95"
+                              title="Edit Student Information & Level"
+                            >
+                              <Edit2 className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                              <span>Edit</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => setSelectedStudentForBio(student)}
+                              className="flex-1 h-11 rounded-xl bg-teal-50 dark:bg-teal-950/40 hover:bg-teal-100 dark:hover:bg-teal-900/60 text-[#007c82] dark:text-teal-400 border border-teal-200 dark:border-teal-800 text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-98"
+                            >
+                              <Fingerprint className="w-4 h-4 text-[#007c82] dark:text-teal-400" />
+                              <span>{fingerCount > 0 ? 'Edit Biometrics' : 'Enroll Biometrics'}</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleDelete(student)}
+                              className="h-11 px-3 rounded-xl text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 border border-rose-200 dark:border-rose-800 transition-all flex items-center justify-center cursor-pointer active:scale-95"
+                              title="Remove Student"
+                              aria-label={`Remove ${student.name}`}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
                         </div>
-                      </div>
+                      </React.Fragment>
                     );
                   })
                 )}
@@ -1698,18 +1941,68 @@ export const Admin: React.FC = () => {
                     {sortedAndFilteredStudents.length === 0 ? (
                       <tr>
                         <td colSpan={8} className="py-12 text-center text-slate-400 dark:text-slate-500">
-                          No matching students found for &quot;{searchQuery}&quot;{selectedStreamFilter !== 'all' ? ` in ${selectedStreamFilter}` : ''}.
+                          No matching students found for &quot;{searchQuery}&quot;
+                          {selectedLevelFilter !== 'all' ? ` in ${selectedLevelFilter}` : ''}
+                          {selectedStreamFilter !== 'all' ? ` (Stream ${selectedStreamFilter})` : ''}.
                         </td>
                       </tr>
                     ) : (
                       sortedAndFilteredStudents.map((student, idx) => {
                         const fingerCount = student.enrolledFingers?.length || 0;
 
+                        const currentCohortLevel = student.level || 'Level 100';
+                        const currentCohortStream = student.stream || 'IT A';
+                        const prevStudent = idx > 0 ? sortedAndFilteredStudents[idx - 1] : null;
+                        const isNewCohort =
+                          !prevStudent ||
+                          (prevStudent.level || 'Level 100') !== currentCohortLevel ||
+                          (prevStudent.stream || 'IT A') !== currentCohortStream;
+                        const cohortCount = sortedAndFilteredStudents.filter(
+                          (s) =>
+                            (s.level || 'Level 100') === currentCohortLevel &&
+                            (s.stream || 'IT A') === currentCohortStream
+                        ).length;
+
                         return (
-                          <tr
-                            key={student.id}
-                            className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors"
-                          >
+                          <React.Fragment key={student.id}>
+                            {isNewCohort && (
+                              <tr className="bg-gradient-to-r from-slate-100/95 via-slate-50/90 to-slate-100/95 dark:from-slate-800/95 dark:via-slate-850 dark:to-slate-800/95 border-y-2 border-slate-200 dark:border-slate-700/80">
+                                <td colSpan={8} className="py-2.5 px-4">
+                                  <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                      <GraduationCap className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                                      <span className="text-slate-900 dark:text-white font-extrabold text-xs tracking-tight">
+                                        {currentCohortLevel}
+                                      </span>
+                                      <span className="text-slate-300 dark:text-slate-600">·</span>
+                                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-[#003b5c] text-white text-[11px] font-black font-mono shadow-xs">
+                                        <Layers className="w-3 h-3 text-teal-300" />
+                                        Division {currentCohortStream}
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-2.5">
+                                      <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                                        {cohortCount} student{cohortCount === 1 ? '' : 's'} in this division
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => openDeleteForCohort(currentCohortLevel, currentCohortStream)}
+                                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/60 hover:bg-rose-100 dark:hover:bg-rose-900/80 border border-rose-200 dark:border-rose-800 transition-colors cursor-pointer shadow-xs"
+                                        title={`Delete all ${cohortCount} students in ${currentCohortLevel} Division ${currentCohortStream} alone`}
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+                                        <span>Delete Division</span>
+                                      </button>
+                                    </div>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+
+                            <tr
+                              key={student.id}
+                              className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors"
+                            >
                             <td className="py-3.5 px-3 text-center font-mono text-xs text-slate-400 dark:text-slate-500">
                               {idx + 1}
                             </td>
@@ -1793,7 +2086,8 @@ export const Admin: React.FC = () => {
                               </div>
                             </td>
                           </tr>
-                        );
+                        </React.Fragment>
+                      );
                       })
                     )}
                   </tbody>
@@ -2704,6 +2998,197 @@ export const Admin: React.FC = () => {
             </div>
 
             {renderBatchImportContent(() => setShowBatchModal(false))}
+          </div>
+        </div>
+      )}
+
+      {/* Delete Specific Cohort / Level / Stream Modal */}
+      {showDeleteCohortModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150 overflow-y-auto">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-lg shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden my-auto">
+            {/* Modal Header */}
+            <div className="bg-gradient-to-r from-[#003b5c] via-[#00526e] to-[#007c82] p-4 sm:p-5 text-white flex items-center justify-between border-b border-[#002b45]">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-white/15 border border-white/20 flex items-center justify-center shadow-inner">
+                  <Trash2 className="w-5 h-5 text-teal-200" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base sm:text-lg">Delete Specific Cohort / Division</h3>
+                  <p className="text-xs text-teal-100/90">Remove only selected level or stream without affecting other students</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowDeleteCohortModal(false)}
+                className="p-1 rounded-lg text-teal-100 hover:text-white hover:bg-white/15 transition-colors cursor-pointer"
+                aria-label="Close modal"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 sm:p-6 space-y-4 text-xs sm:text-sm">
+              {/* Scope Selector: Level, Stream, or Combined */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-2">
+                  What would you like to delete?
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setDeleteTargetType('level')}
+                    className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer font-bold text-xs ${
+                      deleteTargetType === 'level'
+                        ? 'bg-teal-50 dark:bg-teal-950/50 border-[#007c82] text-[#007c82] dark:text-teal-300 ring-2 ring-[#007c82]/25 shadow-xs'
+                        : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-600'
+                    }`}
+                  >
+                    <GraduationCap className={`w-4 h-4 mx-auto mb-1 ${deleteTargetType === 'level' ? 'text-[#007c82] dark:text-teal-400' : 'text-slate-400'}`} />
+                    <span>Entire Level</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setDeleteTargetType('stream')}
+                    className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer font-bold text-xs ${
+                      deleteTargetType === 'stream'
+                        ? 'bg-teal-50 dark:bg-teal-950/50 border-[#007c82] text-[#007c82] dark:text-teal-300 ring-2 ring-[#007c82]/25 shadow-xs'
+                        : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-600'
+                    }`}
+                  >
+                    <Layers className={`w-4 h-4 mx-auto mb-1 ${deleteTargetType === 'stream' ? 'text-[#007c82] dark:text-teal-400' : 'text-slate-400'}`} />
+                    <span>Entire Stream</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setDeleteTargetType('both')}
+                    className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer font-bold text-xs ${
+                      deleteTargetType === 'both'
+                        ? 'bg-teal-50 dark:bg-teal-950/50 border-[#007c82] text-[#007c82] dark:text-teal-300 ring-2 ring-[#007c82]/25 shadow-xs'
+                        : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-600'
+                    }`}
+                  >
+                    <div className="flex items-center justify-center gap-1 mb-1">
+                      <GraduationCap className={`w-3.5 h-3.5 ${deleteTargetType === 'both' ? 'text-[#007c82] dark:text-teal-400' : 'text-slate-400'}`} />
+                      <Layers className={`w-3.5 h-3.5 ${deleteTargetType === 'both' ? 'text-[#007c82] dark:text-teal-400' : 'text-slate-400'}`} />
+                    </div>
+                    <span>Level + Stream</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Target Selections */}
+              <div className="space-y-3 pt-1">
+                {(deleteTargetType === 'level' || deleteTargetType === 'both') && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Academic Level to Delete:
+                    </label>
+                    <select
+                      value={targetDeleteLevel}
+                      onChange={(e) => setTargetDeleteLevel(e.target.value)}
+                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-[#007c82] cursor-pointer"
+                    >
+                      {availableLevels.map((lvl) => (
+                        <option key={lvl} value={lvl}>
+                          {lvl} ({students.filter((s) => (s.level || 'Level 100') === lvl).length} total students)
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {(deleteTargetType === 'stream' || deleteTargetType === 'both') && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Class Stream to Delete:
+                    </label>
+                    <select
+                      value={targetDeleteStream}
+                      onChange={(e) => setTargetDeleteStream(e.target.value)}
+                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-[#007c82] cursor-pointer"
+                    >
+                      {availableStreams.map((st) => (
+                        <option key={st} value={st}>
+                          {st} ({students.filter((s) => (s.stream || 'IT A') === st).length} total students)
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              {/* Impact Summary Box */}
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 space-y-2">
+                <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400 font-bold text-xs">
+                  <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />
+                  <span>
+                    {studentsPendingDelete.length} student{studentsPendingDelete.length === 1 ? '' : 's'} will be deleted
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+                  {deleteTargetType === 'level'
+                    ? `Only students registered under ${targetDeleteLevel} will be permanently removed. All other levels will be preserved.`
+                    : deleteTargetType === 'stream'
+                    ? `Only students in Stream ${targetDeleteStream} will be removed. All other streams will be preserved.`
+                    : `Only students in ${targetDeleteLevel} Stream ${targetDeleteStream} will be removed. Neither other levels of ${targetDeleteStream} nor other streams of ${targetDeleteLevel} will be touched.`}
+                </p>
+
+                {studentsPendingDelete.length > 0 && (
+                  <div className="pt-2 border-t border-slate-200 dark:border-slate-700">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 block mb-1">
+                      Preview of affected students:
+                    </span>
+                    <div className="max-h-24 overflow-y-auto space-y-1 pr-1 scrollbar-thin">
+                      {studentsPendingDelete.slice(0, 10).map((s) => (
+                        <div key={s.id} className="text-[11px] text-slate-700 dark:text-slate-300 flex items-center justify-between">
+                          <span className="truncate font-medium">{s.name}</span>
+                          <span className="font-mono text-[10px] text-slate-400 shrink-0 ml-2">{s.indexNumber}</span>
+                        </div>
+                      ))}
+                      {studentsPendingDelete.length > 10 && (
+                        <div className="text-[10px] font-bold text-teal-700 dark:text-teal-400 italic pt-0.5">
+                          + {studentsPendingDelete.length - 10} more students
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Actions */}
+              <div className="pt-2 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteCohortModal(false)}
+                  disabled={isDeletingCohort}
+                  className="px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-bold text-xs hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleExecuteDeleteCohort}
+                  disabled={isDeletingCohort || studentsPendingDelete.length === 0}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-700 hover:to-rose-800 disabled:opacity-50 text-white font-bold text-xs shadow-md transition-all flex items-center gap-2 cursor-pointer active:scale-95"
+                >
+                  {isDeletingCohort ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Deleting {studentsPendingDelete.length} Students...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete {studentsPendingDelete.length} Students Now</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

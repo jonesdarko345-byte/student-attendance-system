@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import {
   BarChart3,
@@ -21,6 +21,7 @@ export const Reports: React.FC = () => {
   const userStream = currentUser?.role === 'rep' && currentUser?.stream ? currentUser.stream : null;
 
   const [selectedCourseFilter, setSelectedCourseFilter] = useState<string>('all');
+  const [selectedLevelFilter, setSelectedLevelFilter] = useState<string>('all');
   const [selectedStreamFilter, setSelectedStreamFilter] = useState<string>(userStream || 'all');
 
   useEffect(() => {
@@ -28,6 +29,13 @@ export const Reports: React.FC = () => {
       setSelectedStreamFilter(userStream);
     }
   }, [userStream]);
+
+  // Helper to extract numeric level for consistent level ordering
+  const extractLevelNumber = (lvl?: string) => {
+    if (!lvl) return 100;
+    const match = lvl.match(/\d+/);
+    return match ? parseInt(match[0], 10) : 999;
+  };
 
   // Filter attendance records by course and stream
   const relevantRecords = attendanceRecords.filter((record) => {
@@ -38,11 +46,21 @@ export const Reports: React.FC = () => {
     return true;
   });
 
-  // Filter students by selected stream
-  const filteredStudents = students.filter((student) => {
-    if (selectedStreamFilter === 'all') return true;
-    return student.stream === selectedStreamFilter;
-  });
+  // Filter students by selected level and stream, sorted strictly first by Level, then by Stream, then by name
+  const filteredStudents = useMemo(() => {
+    const list = students.filter((student) => {
+      const matchesLevel = selectedLevelFilter === 'all' || (student.level || 'Level 100') === selectedLevelFilter;
+      const matchesStream = selectedStreamFilter === 'all' || (student.stream || 'IT A') === selectedStreamFilter;
+      return matchesLevel && matchesStream;
+    });
+    return [...list].sort((a, b) => {
+      const levelDiff = extractLevelNumber(a.level) - extractLevelNumber(b.level);
+      if (levelDiff !== 0) return levelDiff;
+      const streamDiff = (a.stream || 'IT A').localeCompare(b.stream || 'IT A', undefined, { numeric: true });
+      if (streamDiff !== 0) return streamDiff;
+      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+    });
+  }, [students, selectedLevelFilter, selectedStreamFilter]);
 
   // Calculate high level totals scoped to selected students
   let totalPresentMarks = 0;
@@ -173,6 +191,24 @@ export const Reports: React.FC = () => {
                   {c.code} – {c.title}
                 </option>
               ))}
+            </select>
+          </div>
+
+          {/* Academic Level Filter */}
+          <div className="flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-slate-300">
+            <GraduationCap className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+            <span>Level:</span>
+            <select
+              value={selectedLevelFilter}
+              onChange={(e) => setSelectedLevelFilter(e.target.value)}
+              className="bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-[#007c82]"
+              title="Filter Report by Academic Level"
+            >
+              <option value="all">All Academic Levels</option>
+              <option value="Level 100">Level 100</option>
+              <option value="Level 200">Level 200</option>
+              <option value="Level 300">Level 300</option>
+              <option value="Level 400">Level 400</option>
             </select>
           </div>
 

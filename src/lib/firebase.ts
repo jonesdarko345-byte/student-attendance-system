@@ -11,33 +11,29 @@ import {
   User as FirebaseUser
 } from 'firebase/auth';
 import {
-  initializeFirestore,
-  persistentLocalCache,
-  persistentMultipleTabManager,
+  getFirestore,
   doc,
   getDoc,
-  setLogLevel
+  getDocFromServer
 } from 'firebase/firestore';
-import firebaseConfig from '../../firebase-applet-config.json';
+import defaultConfig from '../../firebase-applet-config.json';
 
-// Silence non-fatal Firestore network retry/offline console notices
-setLogLevel('error');
+// Support both Vercel environment variables (VITE_FIREBASE_*) and bundled firebase-applet-config.json
+const firebaseConfig = {
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || defaultConfig.projectId,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || defaultConfig.appId,
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || defaultConfig.apiKey,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || defaultConfig.authDomain,
+  firestoreDatabaseId: import.meta.env.VITE_FIRESTORE_DATABASE_ID || defaultConfig.firestoreDatabaseId,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || defaultConfig.storageBucket,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || defaultConfig.messagingSenderId,
+};
 
 // Initialize Firebase App
 const app = initializeApp(firebaseConfig);
 
-// Initialize Firestore with custom database ID, robust long-polling, and multi-tab persistent cache
-// experimentalForceLongPolling prevents the 10-second backend connection timeout in sandboxed web environments
-export const db = initializeFirestore(
-  app,
-  {
-    experimentalForceLongPolling: true,
-    localCache: persistentLocalCache({
-      tabManager: persistentMultipleTabManager()
-    })
-  },
-  firebaseConfig.firestoreDatabaseId
-);
+// Initialize Firestore with database ID from configuration
+export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 
 // Initialize Firebase Authentication
 export const auth = getAuth(app);
@@ -99,14 +95,14 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
-// Test Connection on Boot
+// Test Connection to Firestore
 export async function testFirestoreConnection(): Promise<boolean> {
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
     return false;
   }
   try {
-    const testSnap = await getDoc(doc(db, 'test', 'connection'));
-    return testSnap.metadata.fromCache === false || navigator.onLine;
+    await getDocFromServer(doc(db, 'test', 'connection'));
+    return true;
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
       console.warn('[Firestore] Please check your Firebase configuration or internet connection.');
@@ -114,6 +110,9 @@ export async function testFirestoreConnection(): Promise<boolean> {
     return false;
   }
 }
+
+// Initial connection check on module load
+testFirestoreConnection().catch(() => {});
 
 // Auth Helper Functions
 export async function signInWithGoogle(forceAccountPrompt = false) {

@@ -17,7 +17,9 @@ import {
   ShieldCheck,
   BookOpen,
   MapPin,
-  Users
+  Users,
+  GraduationCap,
+  Layers
 } from 'lucide-react';
 
 export const Attendance: React.FC = () => {
@@ -45,6 +47,7 @@ export const Attendance: React.FC = () => {
 
   const [selectedDate, setSelectedDate] = useState<string>(getInitialDate());
   const [selectedCourseId, setSelectedCourseId] = useState<string>(courses[0]?.id || '');
+  const [selectedLevel, setSelectedLevel] = useState<string>('all');
   const [selectedStream, setSelectedStream] = useState<string>(userStream || 'all');
   const [viewMode, setViewMode] = useState<'manual' | 'biometric'>('manual');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -78,14 +81,28 @@ export const Attendance: React.FC = () => {
     }
   }, [courses, selectedCourseId]);
 
-  // Filter students belonging to this stream / division (arranged alphabetically by name)
+  // Helper to extract numeric level for sorting
+  const extractLevelNumber = (lvl?: string) => {
+    if (!lvl) return 100;
+    const match = lvl.match(/\d+/);
+    return match ? parseInt(match[0], 10) : 999;
+  };
+
+  // Filter students belonging to this stream / division (sorted strictly by Level, then by Stream, then by name)
   const streamStudents = useMemo(() => {
     const list = students.filter((s) => {
-      if (selectedStream === 'all') return true;
-      return s.stream === selectedStream;
+      const matchesLevel = selectedLevel === 'all' || (s.level || 'Level 100') === selectedLevel;
+      const matchesStream = selectedStream === 'all' || (s.stream || 'IT A') === selectedStream;
+      return matchesLevel && matchesStream;
     });
-    return [...list].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
-  }, [students, selectedStream]);
+    return [...list].sort((a, b) => {
+      const levelDiff = extractLevelNumber(a.level) - extractLevelNumber(b.level);
+      if (levelDiff !== 0) return levelDiff;
+      const streamDiff = (a.stream || 'IT A').localeCompare(b.stream || 'IT A', undefined, { numeric: true });
+      if (streamDiff !== 0) return streamDiff;
+      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+    });
+  }, [students, selectedLevel, selectedStream]);
 
   // Load existing attendance record for this date + course + stream
   const existingRecord = attendanceRecords.find((r) => {
@@ -342,35 +359,53 @@ export const Attendance: React.FC = () => {
             </span>
           </div>
 
-          {/* 3. Class Division / Stream Picker */}
+          {/* 3. Class Division / Stream & Level Picker */}
           <div>
-            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
-              <Users className="w-3.5 h-3.5 text-[#007c82] dark:text-teal-400" />
-              Class Division
+            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+              <span className="flex items-center gap-1.5">
+                <Users className="w-3.5 h-3.5 text-[#007c82] dark:text-teal-400" />
+                Level & Division
+              </span>
+              <span className="text-[10px] text-slate-400 font-mono">
+                {streamStudents.length} student{streamStudents.length === 1 ? '' : 's'}
+              </span>
             </label>
-            {userStream ? (
-              <div className="w-full bg-teal-50 dark:bg-teal-950/40 border border-teal-300 dark:border-teal-800 rounded-xl px-3 py-2 text-sm text-[#007c82] dark:text-teal-300 font-bold flex items-center justify-between">
-                <span>Division {userStream}</span>
-                <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-[#007c82] text-white">
-                  Class Rep Scoped
-                </span>
-              </div>
-            ) : (
+            <div className="grid grid-cols-2 gap-2">
               <select
-                value={selectedStream}
-                onChange={(e) => setSelectedStream(e.target.value)}
-                className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-800 dark:text-slate-100 font-medium focus:outline-none focus:ring-2 focus:ring-[#007c82]"
+                value={selectedLevel}
+                onChange={(e) => setSelectedLevel(e.target.value)}
+                className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-2.5 py-2 text-xs text-slate-800 dark:text-slate-100 font-bold focus:outline-none focus:ring-2 focus:ring-[#007c82]"
+                title="Filter by Academic Level"
               >
-                <option value="all">All Divisions (Full Cohort)</option>
-                <option value="IT A">Division IT A</option>
-                <option value="IT B">Division IT B</option>
-                <option value="IT C">Division IT C</option>
-                <option value="IT D">Division IT D</option>
-                <option value="IT E">Division IT E</option>
+                <option value="all">All Levels</option>
+                <option value="Level 100">Level 100</option>
+                <option value="Level 200">Level 200</option>
+                <option value="Level 300">Level 300</option>
+                <option value="Level 400">Level 400</option>
               </select>
-            )}
+
+              {userStream ? (
+                <div className="w-full bg-teal-50 dark:bg-teal-950/40 border border-teal-300 dark:border-teal-800 rounded-xl px-2.5 py-2 text-xs text-[#007c82] dark:text-teal-300 font-bold flex items-center justify-between">
+                  <span>Stream {userStream}</span>
+                </div>
+              ) : (
+                <select
+                  value={selectedStream}
+                  onChange={(e) => setSelectedStream(e.target.value)}
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-2.5 py-2 text-xs text-slate-800 dark:text-slate-100 font-bold focus:outline-none focus:ring-2 focus:ring-[#007c82]"
+                  title="Filter by Division / Stream"
+                >
+                  <option value="all">All Streams</option>
+                  <option value="IT A">Division IT A</option>
+                  <option value="IT B">Division IT B</option>
+                  <option value="IT C">Division IT C</option>
+                  <option value="IT D">Division IT D</option>
+                  <option value="IT E">Division IT E</option>
+                </select>
+              )}
+            </div>
             <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 block">
-              {streamStudents.length} student{streamStudents.length === 1 ? '' : 's'} in this division
+              Cohorts separated by Level, then Stream
             </span>
           </div>
 
