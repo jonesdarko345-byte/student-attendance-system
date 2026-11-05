@@ -36,6 +36,10 @@ const DAYS_OF_WEEK = [
 ];
 
 const VENUE_PRESETS = [
+  'LTS 1',
+  'APP LAB 1',
+  'APP LAB 3',
+  'Online',
   'LT 1 - Main Campus',
   'LT 2 - Sunyani Campus',
   'LT 3 - Lecture Hall',
@@ -46,11 +50,14 @@ const VENUE_PRESETS = [
 ];
 
 const TIME_PRESETS = [
+  { label: '07:00 – 08:55 (Periods 1-2)', start: '07:00', end: '08:55' },
+  { label: '09:00 – 10:55 (Periods 3-4)', start: '09:00', end: '10:55' },
+  { label: '13:00 – 14:55 (Periods 7-8)', start: '13:00', end: '14:55' },
+  { label: '15:00 – 16:55 (Periods 9-10)', start: '15:00', end: '16:55' },
+  { label: '17:00 – 17:55 (Period 11)', start: '17:00', end: '17:55' },
+  { label: '17:00 – 18:55 (Periods 11-12)', start: '17:00', end: '18:55' },
   { label: '08:00 – 10:00', start: '08:00', end: '10:00' },
-  { label: '10:30 – 12:30', start: '10:30', end: '12:30' },
-  { label: '13:00 – 15:00', start: '13:00', end: '15:00' },
-  { label: '15:30 – 17:30', start: '15:30', end: '17:30' },
-  { label: '18:00 – 20:00', start: '18:00', end: '20:00' }
+  { label: '10:30 – 12:30', start: '10:30', end: '12:30' }
 ];
 
 export const Timetable: React.FC = () => {
@@ -62,6 +69,7 @@ export const Timetable: React.FC = () => {
     isPoorConnection,
     offlineCacheInfo,
     saveTimetableOffline,
+    loadOfficialL200Timetable,
     addCourse,
     updateCourse,
     removeCourse,
@@ -77,6 +85,8 @@ export const Timetable: React.FC = () => {
   const [includeSaturday, setIncludeSaturday] = useState<boolean>(false);
   const [showPocketView, setShowPocketView] = useState<boolean>(false);
   const [offlineSaveNotice, setOfflineSaveNotice] = useState<string | null>(null);
+  const [syncL200Notice, setSyncL200Notice] = useState<string | null>(null);
+  const [isLoadingL200, setIsLoadingL200] = useState<boolean>(false);
   const [selectedTimetableStream, setSelectedTimetableStream] = useState<string>('all');
 
   const handleManualSaveOffline = () => {
@@ -237,10 +247,32 @@ export const Timetable: React.FC = () => {
 
   const filteredTimetable = timetable.filter((slot) => {
     if (selectedTimetableStream === 'all') return true;
-    return !slot.stream || slot.stream === 'all' || slot.stream === selectedTimetableStream;
+    if (slot.stream === selectedTimetableStream) return true;
+    if (!slot.stream || slot.stream === 'all') return true;
+    // Allow matching variants: IT A <-> L200 IT-A <-> IT 200 A
+    if (selectedTimetableStream === 'IT A' && (slot.stream === 'L200 IT-A' || slot.stream === 'IT 200 A')) return true;
+    if (selectedTimetableStream === 'L200 IT-A' && (slot.stream === 'IT A' || slot.stream === 'IT 200 A')) return true;
+    if (selectedTimetableStream === 'IT 200 A' && (slot.stream === 'IT A' || slot.stream === 'L200 IT-A')) return true;
+    return false;
   });
 
   const visibleDays = includeSaturday ? DAYS_OF_WEEK : DAYS_OF_WEEK.slice(0, 5);
+
+  const handleSyncL200 = async () => {
+    setIsLoadingL200(true);
+    try {
+      const res = await loadOfficialL200Timetable(true);
+      if (res.success) {
+        setSyncL200Notice(`Official L200 IT-A schedule loaded (${res.coursesCount} courses, ${res.slotsCount} periods)!`);
+        setTimeout(() => setSyncL200Notice(null), 5000);
+      }
+    } catch (err: any) {
+      setSyncL200Notice('Error syncing timetable: ' + (err.message || 'Check connection'));
+      setTimeout(() => setSyncL200Notice(null), 5000);
+    } finally {
+      setIsLoadingL200(false);
+    }
+  };
 
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
@@ -254,7 +286,7 @@ export const Timetable: React.FC = () => {
           </div>
           <h2 className="text-2xl font-black text-slate-900 dark:text-white mt-0.5">Semester Timetable</h2>
           <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
-            {semester.name} ({semester.academicYear}) · Assign your custom course names and days studied.
+            {semester.name} ({semester.academicYear}) · UENR Department of Information Technology & Decision Sciences
           </p>
         </div>
 
@@ -286,6 +318,21 @@ export const Timetable: React.FC = () => {
           </div>
 
           <button
+            id="sync-official-l200-btn"
+            onClick={handleSyncL200}
+            disabled={isLoadingL200}
+            className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white dark:bg-teal-700 dark:hover:bg-teal-600 text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+            title="Load the official UENR Level 200 Stream A lecture and lab timetable"
+          >
+            {isLoadingL200 ? (
+              <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#8dc63f]" />
+            ) : (
+              <Sparkles className="w-3.5 h-3.5 text-[#8dc63f] dark:text-emerald-300" />
+            )}
+            <span>{isLoadingL200 ? 'Syncing...' : 'Sync L200 IT-A Timetable'}</span>
+          </button>
+
+          <button
             id="assign-course-study-days-btn"
             onClick={() => {
               if (courses.length > 0) {
@@ -304,6 +351,14 @@ export const Timetable: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Sync L200 Notification Banner */}
+      {syncL200Notice && (
+        <div className="bg-emerald-500/10 dark:bg-emerald-950/40 border border-emerald-500/30 dark:border-emerald-700/50 rounded-2xl p-3 sm:p-4 flex items-center gap-3 text-emerald-900 dark:text-emerald-200 shadow-xs animate-in fade-in">
+          <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+          <p className="text-xs sm:text-sm font-bold">{syncL200Notice}</p>
+        </div>
+      )}
 
       {/* Offline Status Alert Banner */}
       {!isOnline && (
@@ -511,7 +566,7 @@ export const Timetable: React.FC = () => {
               >
                 All Divisions
               </button>
-              {['IT A', 'IT B', 'IT C', 'IT D', 'IT E'].map((st) => (
+              {['L200 IT-A', 'IT A', 'IT B', 'IT C', 'IT D', 'IT E'].map((st) => (
                 <button
                   key={st}
                   onClick={() => setSelectedTimetableStream(st)}
@@ -1111,6 +1166,7 @@ export const Timetable: React.FC = () => {
                   className="w-full bg-white border border-teal-300 rounded-xl px-3 py-2 text-xs font-bold text-[#007c82] focus:outline-none focus:ring-2 focus:ring-[#007c82]"
                 >
                   <option value="all">All Divisions (Shared Cohort Lecture)</option>
+                  <option value="L200 IT-A">Division L200 IT-A (Level 200 Stream A)</option>
                   <option value="IT A">Division IT A Only</option>
                   <option value="IT B">Division IT B Only</option>
                   <option value="IT C">Division IT C Only</option>
@@ -1247,6 +1303,7 @@ export const Timetable: React.FC = () => {
                   className="w-full bg-teal-50 border border-teal-300 rounded-xl px-3 py-2 text-xs font-bold text-[#007c82]"
                 >
                   <option value="all">All Divisions (Shared)</option>
+                  <option value="L200 IT-A">Division L200 IT-A (Level 200 Stream A)</option>
                   <option value="IT A">Division IT A</option>
                   <option value="IT B">Division IT B</option>
                   <option value="IT C">Division IT C</option>

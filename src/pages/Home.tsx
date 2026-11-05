@@ -82,7 +82,7 @@ export const Home: React.FC = () => {
                   Class Roster & Enrollment
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
-                  Manage Level 300 student profiles, index numbers, and enroll 10-finger biometric records.
+                  Manage Level 200 student profiles, index numbers, and enroll 10-finger biometric records.
                 </p>
               </div>
             </div>

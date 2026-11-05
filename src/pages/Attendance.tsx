@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { BiometricAttendance } from '../components/BiometricAttendance';
+import { ClassroomQRModal } from '../components/ClassroomQRModal';
 import {
   Calendar,
   Clock,
@@ -19,7 +20,8 @@ import {
   MapPin,
   Users,
   GraduationCap,
-  Layers
+  Layers,
+  QrCode
 } from 'lucide-react';
 
 export const Attendance: React.FC = () => {
@@ -54,6 +56,7 @@ export const Attendance: React.FC = () => {
   const [sessionRecords, setSessionRecords] = useState<Record<string, 'present' | 'absent'>>({});
   const [biometricVerifiedIds, setBiometricVerifiedIds] = useState<string[]>([]);
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string>('');
+  const [showQRModal, setShowQRModal] = useState<boolean>(false);
 
   // Synchronize stream if Class Rep logs in
   useEffect(() => {
@@ -71,7 +74,12 @@ export const Attendance: React.FC = () => {
   const scheduledSlotsForDay = timetable.filter((slot) => {
     if (slot.dayOfWeek !== dayOfWeek) return false;
     if (selectedStream === 'all') return true;
-    return !slot.stream || slot.stream === 'all' || slot.stream === selectedStream;
+    if (slot.stream === selectedStream) return true;
+    if (!slot.stream || slot.stream === 'all') return true;
+    if (selectedStream === 'IT A' && (slot.stream === 'L200 IT-A' || slot.stream === 'IT 200 A')) return true;
+    if (selectedStream === 'L200 IT-A' && (slot.stream === 'IT A' || slot.stream === 'IT 200 A')) return true;
+    if (selectedStream === 'IT 200 A' && (slot.stream === 'IT A' || slot.stream === 'L200 IT-A')) return true;
+    return false;
   });
 
   // Only reset course if the currently selected course was deleted
@@ -92,7 +100,13 @@ export const Attendance: React.FC = () => {
   const streamStudents = useMemo(() => {
     const list = students.filter((s) => {
       const matchesLevel = selectedLevel === 'all' || (s.level || 'Level 100') === selectedLevel;
-      const matchesStream = selectedStream === 'all' || (s.stream || 'IT A') === selectedStream;
+      const sStream = s.stream || 'IT A';
+      const matchesStream =
+        selectedStream === 'all' ||
+        sStream === selectedStream ||
+        (selectedStream === 'IT A' && (sStream === 'L200 IT-A' || sStream === 'IT 200 A')) ||
+        (selectedStream === 'L200 IT-A' && (sStream === 'IT A' || sStream === 'IT 200 A')) ||
+        (selectedStream === 'IT 200 A' && (sStream === 'IT A' || sStream === 'L200 IT-A'));
       return matchesLevel && matchesStream;
     });
     return [...list].sort((a, b) => {
@@ -264,6 +278,18 @@ export const Attendance: React.FC = () => {
             Biometric Scanner
           </button>
         </div>
+
+        {/* Live Projector QR Attendance Launch Button */}
+        <button
+          id="launch-classroom-qr-btn"
+          onClick={() => setShowQRModal(true)}
+          disabled={!activeCourse}
+          className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white dark:bg-teal-700 dark:hover:bg-teal-600 text-xs font-bold transition-all shadow-sm flex items-center gap-2 cursor-pointer disabled:opacity-50"
+          title="Display high-visibility live QR code on classroom projector for 5-second student check-ins"
+        >
+          <QrCode className="w-4 h-4 text-[#8dc63f] dark:text-emerald-300" />
+          <span>Projector QR Attendance</span>
+        </button>
       </div>
 
       {/* Notice if no courses exist yet */}
@@ -396,6 +422,7 @@ export const Attendance: React.FC = () => {
                   title="Filter by Division / Stream"
                 >
                   <option value="all">All Streams</option>
+                  <option value="L200 IT-A">Division L200 IT-A (Level 200 Stream A)</option>
                   <option value="IT A">Division IT A</option>
                   <option value="IT B">Division IT B</option>
                   <option value="IT C">Division IT C</option>
@@ -844,6 +871,15 @@ export const Attendance: React.FC = () => {
       )}
         </>
       )}
+
+      {/* Classroom Projector QR Modal */}
+      <ClassroomQRModal
+        isOpen={showQRModal}
+        onClose={() => setShowQRModal(false)}
+        course={activeCourse}
+        date={selectedDate}
+        stream={selectedStream}
+      />
     </div>
   );
 };

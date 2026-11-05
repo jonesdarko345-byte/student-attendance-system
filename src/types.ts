@@ -1,4 +1,4 @@
-export const DEFAULT_STREAMS = ['IT A', 'IT B', 'IT C', 'IT D', 'IT E'] as const;
+export const DEFAULT_STREAMS = ['IT A', 'IT B', 'IT C', 'IT D', 'IT E', 'L200 IT-A', 'IT 200 A'] as const;
 export type ClassStream = typeof DEFAULT_STREAMS[number] | string;
 
 export interface Student {

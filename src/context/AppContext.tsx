@@ -18,7 +18,9 @@ import {
   INITIAL_ATTENDANCE,
   INITIAL_AUTHORIZED_USERS,
   INITIAL_AUDIT_LOGS,
-  INITIAL_SEMESTER
+  INITIAL_SEMESTER,
+  OFFICIAL_L200_COURSES,
+  OFFICIAL_L200_TIMETABLE
 } from '../data/mockData';
 import {
   db,
@@ -115,6 +117,7 @@ interface AppContextType {
   exportDatabaseJSON: () => string;
   importDatabaseJSON: (jsonStr: string) => Promise<{ success: boolean; count: number; error?: string }>;
   seedSampleCoursesIfEmpty: () => Promise<void>;
+  loadOfficialL200Timetable: (overwriteExisting?: boolean) => Promise<{ success: boolean; coursesCount: number; slotsCount: number }>;
 
   // Student actions
   addStudent: (student: Omit<Student, 'id' | 'createdAt' | 'enrolledFingers'>) => Promise<void>;
@@ -159,6 +162,19 @@ interface AppContextType {
     stream?: string
   ) => Promise<void>;
   unlockAttendance: (date: string, courseId: string, stream?: string) => Promise<void>;
+  checkInStudentWithIndex: (
+    indexNumber: string,
+    date: string,
+    courseId: string,
+    stream?: string
+  ) => Promise<{
+    success: boolean;
+    message: string;
+    student?: Student;
+    course?: Course;
+    stats?: { attended: number; total: number; percentage: number; isEligible: boolean };
+    alreadyCheckedIn?: boolean;
+  }>;
 
   // Audit & Auto-Logging actions
   addAuditLog: (action: string, details: string, type: AuditLog['type']) => Promise<void>;
@@ -360,7 +376,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const saved = localStorage.getItem(STORAGE_KEYS.COURSES) || localStorage.getItem('uenr_courses_v2');
       if (saved) {
         const parsed: Course[] = JSON.parse(saved);
-        return parsed.filter((c) => !DUMMY_COURSE_IDS.includes(c.id));
+        const filtered = parsed.filter((c) => !DUMMY_COURSE_IDS.includes(c.id));
+        return filtered.length > 0 ? filtered : INITIAL_COURSES;
       }
       return INITIAL_COURSES;
     } catch {
@@ -373,18 +390,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // 1. Check dedicated offline snapshot first for instant offline readiness
       const offlineSnapshot = loadTimetableFromOfflineStorage();
       if (offlineSnapshot && Array.isArray(offlineSnapshot.timetable) && offlineSnapshot.timetable.length > 0) {
-        return offlineSnapshot.timetable.filter(
+        const filtered = offlineSnapshot.timetable.filter(
           (t) => !DUMMY_SLOT_IDS.includes(t.id) && !DUMMY_COURSE_IDS.includes(t.courseId)
         );
+        if (filtered.length > 0) return filtered;
       }
 
       // 2. Check standard local storage
       const saved = localStorage.getItem(STORAGE_KEYS.TIMETABLE) || localStorage.getItem('uenr_timetable_v2');
       if (saved) {
         const parsed: TimetableSlot[] = JSON.parse(saved);
-        return parsed.filter(
+        const filtered = parsed.filter(
           (t) => !DUMMY_SLOT_IDS.includes(t.id) && !DUMMY_COURSE_IDS.includes(t.courseId)
         );
+        return filtered.length > 0 ? filtered : INITIAL_TIMETABLE;
       }
       return INITIAL_TIMETABLE;
     } catch {
@@ -803,7 +822,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             list.push(c);
           }
         });
-        setCourses(list);
+        if (list.length > 0) {
+          setCourses(list);
+        } else {
+          setCourses((current) => {
+            if (current.length > 0) {
+              const batch = writeBatch(db);
+              current.forEach((c) => batch.set(doc(db, 'courses', c.id), c));
+              batch.commit().catch(() => {});
+              return current;
+            }
+            return OFFICIAL_L200_COURSES;
+          });
+        }
       },
       (error) => {
         console.warn('[Firestore] Courses listener sync notice:', error);
@@ -824,7 +855,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             list.push(t);
           }
         });
-        setTimetable(list);
+        if (list.length > 0) {
+          setTimetable(list);
+        } else {
+          setTimetable((current) => {
+            if (current.length > 0) {
+              const batch = writeBatch(db);
+              current.forEach((t) => batch.set(doc(db, 'timetable', t.id), t));
+              batch.commit().catch(() => {});
+              return current;
+            }
+            return OFFICIAL_L200_TIMETABLE;
+          });
+        }
       },
       (error) => {
         console.warn('[Firestore] Timetable listener sync notice:', error);
@@ -1746,10 +1789,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Attendance Actions
   const matchAttendanceStream = (recordStream?: string, requestedStream?: string) => {
-    if (!requestedStream || requestedStream === 'All' || requestedStream === 'All Streams') {
-      return !recordStream || recordStream === 'All' || recordStream === 'All Streams';
+    if (!requestedStream || requestedStream === 'All' || requestedStream === 'all' || requestedStream === 'All Streams') {
+      return !recordStream || recordStream === 'All' || recordStream === 'all' || recordStream === 'All Streams';
     }
-    return recordStream === requestedStream;
+    if (recordStream === requestedStream) return true;
+    if (requestedStream === 'IT A' && (recordStream === 'L200 IT-A' || recordStream === 'IT 200 A')) return true;
+    if (requestedStream === 'L200 IT-A' && (recordStream === 'IT A' || recordStream === 'IT 200 A')) return true;
+    if (requestedStream === 'IT 200 A' && (recordStream === 'IT A' || recordStream === 'L200 IT-A')) return true;
+    return false;
   };
 
   const getAttendanceForSession = (date: string, courseId: string, stream?: string) => {
@@ -1770,7 +1817,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const presentCount = Object.values(records).filter((s) => s === 'present').length;
     const absentCount = Object.values(records).filter((s) => s === 'absent').length;
 
-    const normalizedStream = stream && stream !== 'All' && stream !== 'All Streams' ? stream : undefined;
+    const normalizedStream = stream && stream !== 'All' && stream !== 'all' && stream !== 'All Streams' ? stream : undefined;
 
     const existingIdx = attendanceRecords.findIndex(
       (r) => r.date === date && r.courseId === courseId && matchAttendanceStream(r.stream, normalizedStream)
@@ -1826,7 +1873,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const unlockAttendance = async (date: string, courseId: string, stream?: string) => {
     const course = courses.find((c) => c.id === courseId);
-    const normalizedStream = stream && stream !== 'All' && stream !== 'All Streams' ? stream : undefined;
+    const normalizedStream = stream && stream !== 'All' && stream !== 'all' && stream !== 'All Streams' ? stream : undefined;
     const record = attendanceRecords.find(
       (r) => r.date === date && r.courseId === courseId && matchAttendanceStream(r.stream, normalizedStream)
     );
@@ -1848,6 +1895,137 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         handleFirestoreError(error, OperationType.UPDATE, `attendance/${record.id}`);
       }
     }
+  };
+
+  const checkInStudentWithIndex = async (
+    indexNumber: string,
+    date: string,
+    courseId: string,
+    stream?: string
+  ) => {
+    const cleanInput = indexNumber.trim().toUpperCase();
+    const normalizedInput = cleanInput.replace(/[^A-Z0-9]/g, '');
+
+    if (!cleanInput) {
+      return { success: false, message: 'Please enter your student index number.' };
+    }
+
+    // Match student from roster
+    const student = students.find((s) => {
+      const sIndex = (s.indexNumber || '').trim().toUpperCase();
+      const sNorm = sIndex.replace(/[^A-Z0-9]/g, '');
+      return sIndex === cleanInput || sNorm === normalizedInput;
+    });
+
+    if (!student) {
+      return {
+        success: false,
+        message: `Index number "${cleanInput}" was not found in the student roster. Please verify your index number (e.g. UEB3100122) or contact your course lecturer.`
+      };
+    }
+
+    const course = courses.find((c) => c.id === courseId);
+    const normalizedStream = stream && stream !== 'All' && stream !== 'all' && stream !== 'All Streams' ? stream : undefined;
+
+    // Helper to calculate student's course attendance statistics
+    const calculateStats = (isNowPresent: boolean) => {
+      let attended = 0;
+      let total = 0;
+      attendanceRecords.forEach((r) => {
+        if (r.courseId === courseId) {
+          total++;
+          if (r.records && r.records[student.id] === 'present') {
+            attended++;
+          }
+        }
+      });
+      if (isNowPresent && !attendanceRecords.some((r) => r.date === date && r.courseId === courseId && r.records && r.records[student.id] === 'present')) {
+        attended++;
+        if (!attendanceRecords.some((r) => r.date === date && r.courseId === courseId)) {
+          total++;
+        }
+      }
+      total = Math.max(total, 1);
+      const percentage = Math.round((attended / total) * 100);
+      return {
+        attended,
+        total,
+        percentage,
+        isEligible: percentage >= 75
+      };
+    };
+
+    // Find existing session
+    const existingIdx = attendanceRecords.findIndex(
+      (r) => r.date === date && r.courseId === courseId && matchAttendanceStream(r.stream, normalizedStream)
+    );
+
+    const existingRecord = existingIdx >= 0 ? attendanceRecords[existingIdx] : null;
+
+    // Check if already marked present
+    if (existingRecord && existingRecord.records && existingRecord.records[student.id] === 'present') {
+      const stats = calculateStats(false);
+      return {
+        success: true,
+        alreadyCheckedIn: true,
+        message: `${student.name} is already checked in for today's lecture.`,
+        student,
+        course,
+        stats
+      };
+    }
+
+    // Mark as present
+    const streamSuffix = normalizedStream ? `-${normalizedStream.replace(/\s+/g, '_')}` : '';
+    const recordId = existingRecord ? existingRecord.id : `att-${date}-${courseId}${streamSuffix}`;
+    const currentRecords = existingRecord ? { ...existingRecord.records } : {};
+    currentRecords[student.id] = 'present';
+
+    const updatedRecord: AttendanceRecord = {
+      id: recordId,
+      date,
+      courseId,
+      stream: normalizedStream,
+      isFinalized: false,
+      records: currentRecords,
+      biometricVerifiedStudentIds: existingRecord ? existingRecord.biometricVerifiedStudentIds || [] : []
+    };
+
+    setAttendanceRecords((prev) => {
+      if (existingIdx >= 0) {
+        const copy = [...prev];
+        copy[existingIdx] = updatedRecord;
+        return copy;
+      }
+      return [...prev, updatedRecord];
+    });
+
+    try {
+      localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify([...attendanceRecords.filter(r => r.id !== recordId), updatedRecord]));
+    } catch (e) {}
+
+    // Sync to Firestore
+    try {
+      await setDoc(doc(db, 'attendance', recordId), updatedRecord);
+    } catch (err) {
+      console.warn('[Firestore] Note syncing QR check-in:', err);
+    }
+
+    await addAuditLog(
+      'QR Check-In',
+      `${student.name} (${student.indexNumber}) checked in via Classroom QR for ${course?.code || 'lecture'}`,
+      'attendance'
+    );
+
+    const stats = calculateStats(true);
+    return {
+      success: true,
+      alreadyCheckedIn: false,
+      message: `Checked in successfully! You are marked present for ${course?.code || 'lecture'}.`,
+      student,
+      course,
+      stats
+    };
   };
 
   // Database Management Functions
@@ -1994,35 +2172,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const seedSampleCoursesIfEmpty = async () => {
-    const sampleCourses: Course[] = [
-      { id: `crs-${Date.now()}-1`, code: 'IT 301', title: 'Web Technologies & Development', creditHours: 3, lecturer: 'Dr. Kwabena Asante', department: 'Information Technology' },
-      { id: `crs-${Date.now()}-2`, code: 'IT 303', title: 'Database Systems & Administration', creditHours: 3, lecturer: 'Dr. Afia Osei', department: 'Information Technology' },
-      { id: `crs-${Date.now()}-3`, code: 'IT 305', title: 'Operating Systems & Cloud Arch', creditHours: 3, lecturer: 'Ing. Emmanuel Mensah', department: 'Computer Science' },
-      { id: `crs-${Date.now()}-4`, code: 'IT 307', title: 'Computer Networks & Security', creditHours: 3, lecturer: 'Dr. Seth Boateng', department: 'Information Technology' }
-    ];
+  const loadOfficialL200Timetable = async (overwriteExisting: boolean = false) => {
+    try {
+      setIsSyncing(true);
+      const batch = writeBatch(db);
 
-    const sampleSlots: TimetableSlot[] = [
-      { id: `tt-${Date.now()}-1`, courseId: sampleCourses[0].id, dayOfWeek: 1, startTime: '08:00', endTime: '10:00', venue: 'LT 2 · Sunyani Campus' },
-      { id: `tt-${Date.now()}-2`, courseId: sampleCourses[1].id, dayOfWeek: 2, startTime: '10:00', endTime: '12:00', venue: 'IT Computer Lab 1' },
-      { id: `tt-${Date.now()}-3`, courseId: sampleCourses[2].id, dayOfWeek: 3, startTime: '13:00', endTime: '15:00', venue: 'Engineering Block Rm 14' },
-      { id: `tt-${Date.now()}-4`, courseId: sampleCourses[3].id, dayOfWeek: 4, startTime: '09:00', endTime: '11:00', venue: 'LT 1 · Sunyani Campus' }
-    ];
-
-    setCourses(sampleCourses);
-    setTimetable(sampleSlots);
-
-    if (firebaseUser) {
-      try {
-        const batch = writeBatch(db);
-        sampleCourses.forEach((c) => batch.set(doc(db, 'courses', c.id), c));
-        sampleSlots.forEach((s) => batch.set(doc(db, 'timetable', s.id), s));
-        await batch.commit();
-      } catch (err) {
-        console.warn('Seeding cloud note:', err);
+      if (overwriteExisting) {
+        courses.forEach((c) => batch.delete(doc(db, 'courses', c.id)));
+        timetable.forEach((s) => batch.delete(doc(db, 'timetable', s.id)));
       }
+
+      OFFICIAL_L200_COURSES.forEach((c) => batch.set(doc(db, 'courses', c.id), c));
+      OFFICIAL_L200_TIMETABLE.forEach((s) => batch.set(doc(db, 'timetable', s.id), s));
+
+      setCourses(OFFICIAL_L200_COURSES);
+      setTimetable(OFFICIAL_L200_TIMETABLE);
+
+      try {
+        localStorage.setItem(STORAGE_KEYS.COURSES, JSON.stringify(OFFICIAL_L200_COURSES));
+        localStorage.setItem(STORAGE_KEYS.TIMETABLE, JSON.stringify(OFFICIAL_L200_TIMETABLE));
+      } catch (e) {}
+
+      await batch.commit();
+      saveTimetableOffline();
+      await addAuditLog(
+        'L200 IT-A Timetable Synced',
+        'Loaded official UENR 1st Semester 2026/2027 timetable for Level 200 Stream A (8 courses, 12 lecture/lab periods)',
+        'timetable'
+      );
+      return { success: true, coursesCount: OFFICIAL_L200_COURSES.length, slotsCount: OFFICIAL_L200_TIMETABLE.length };
+    } catch (err: any) {
+      console.warn('Syncing official timetable note:', err);
+      setCourses(OFFICIAL_L200_COURSES);
+      setTimetable(OFFICIAL_L200_TIMETABLE);
+      saveTimetableOffline();
+      return { success: true, coursesCount: OFFICIAL_L200_COURSES.length, slotsCount: OFFICIAL_L200_TIMETABLE.length };
+    } finally {
+      setIsSyncing(false);
     }
-    await addAuditLog('Curriculum Seeded', 'Loaded 4 standard BSc IT Level 300 courses & weekly schedule', 'timetable');
+  };
+
+  const seedSampleCoursesIfEmpty = async () => {
+    await loadOfficialL200Timetable(true);
   };
 
   const resetToDefaults = () => {
@@ -2080,6 +2271,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         exportDatabaseJSON,
         importDatabaseJSON,
         seedSampleCoursesIfEmpty,
+        loadOfficialL200Timetable,
         addStudent,
         batchAddStudents,
         updateStudent,
@@ -2103,6 +2295,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         getAttendanceForSession,
         saveAttendance,
         unlockAttendance,
+        checkInStudentWithIndex,
         addAuditLog,
         autoLoggingSettings,
         updateAutoLoggingSettings,

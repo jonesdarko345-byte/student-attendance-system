@@ -9,9 +9,15 @@ import { Attendance } from './pages/Attendance';
 import { Timetable } from './pages/Timetable';
 import { Admin } from './pages/Admin';
 import { Reports } from './pages/Reports';
+import { StudentCheckIn } from './components/StudentCheckIn';
 
 const AppContent: React.FC = () => {
   const { activeTab } = useApp();
+  const isCheckInMode = typeof window !== 'undefined' && window.location.search.includes('checkin=');
+
+  if (isCheckInMode) {
+    return <StudentCheckIn />;
+  }
 
   return (
     <AccessGate>
