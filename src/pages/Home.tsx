@@ -15,7 +15,7 @@ export const Home: React.FC = () => {
   const { setActiveTab, students, attendanceRecords } = useApp();
 
   const totalStudents = students.length;
-  const biometricCount = students.filter((s) => s.biometricEnrolled).length;
+  const biometricCount = students.filter((s) => s.enrolledFingers && s.enrolledFingers.length > 0).length;
   const totalSessions = attendanceRecords.length;
 
   return (

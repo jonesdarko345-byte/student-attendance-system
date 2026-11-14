@@ -1,9 +1,105 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ShieldCheck, GraduationCap, Lock, FileText, X, CheckCircle2, AlertCircle, Building2, User } from 'lucide-react';
 
 export const Footer: React.FC = () => {
   const currentYear = new Date().getFullYear();
   const [showLicenseModal, setShowLicenseModal] = useState(false);
+  const modalBodyRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!showLicenseModal) return;
+
+    const html = document.documentElement;
+    const body = document.body;
+
+    const prevHtmlOverflow = html.style.overflow;
+    const prevBodyOverflow = body.style.overflow;
+    const prevHtmlOverscroll = html.style.overscrollBehavior;
+    const prevBodyOverscroll = body.style.overscrollBehavior;
+    const prevBodyPaddingRight = body.style.paddingRight;
+
+    const scrollbarWidth = window.innerWidth - html.clientWidth;
+    if (scrollbarWidth > 0) {
+      const computedPadding = parseFloat(window.getComputedStyle(body).paddingRight) || 0;
+      body.style.paddingRight = `${computedPadding + scrollbarWidth}px`;
+    }
+
+    html.style.overflow = 'hidden';
+    body.style.overflow = 'hidden';
+    html.style.overscrollBehavior = 'none';
+    body.style.overscrollBehavior = 'none';
+
+    let lastTouchY = 0;
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 1) {
+        lastTouchY = e.touches[0].clientY;
+      }
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      const scroller = modalBodyRef.current;
+      if (!scroller || !scroller.contains(e.target as Node)) {
+        e.preventDefault();
+        return;
+      }
+
+      if (scroller.scrollHeight <= scroller.clientHeight) {
+        e.preventDefault();
+        return;
+      }
+
+      const currentY = e.touches[0].clientY;
+      const deltaY = lastTouchY - currentY;
+      lastTouchY = currentY;
+
+      const atTop = scroller.scrollTop <= 0 && deltaY < 0;
+      const atBottom =
+        scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1 && deltaY > 0;
+
+      if (atTop || atBottom) {
+        e.preventDefault();
+      }
+    };
+
+    const onWheel = (e: WheelEvent) => {
+      const scroller = modalBodyRef.current;
+      if (!scroller || !scroller.contains(e.target as Node)) {
+        e.preventDefault();
+        return;
+      }
+
+      if (scroller.scrollHeight <= scroller.clientHeight) {
+        e.preventDefault();
+        return;
+      }
+
+      const atTop = scroller.scrollTop <= 0 && e.deltaY < 0;
+      const atBottom =
+        scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1 && e.deltaY > 0;
+
+      if (atTop || atBottom) {
+        e.preventDefault();
+      }
+    };
+
+    document.addEventListener('touchstart', onTouchStart, { passive: true });
+    document.addEventListener('touchmove', onTouchMove, { passive: false });
+    document.addEventListener('wheel', onWheel, { passive: false });
+
+    return () => {
+      document.removeEventListener('touchstart', onTouchStart);
+      document.removeEventListener('touchmove', onTouchMove);
+      document.removeEventListener('wheel', onWheel);
+
+      html.style.overflow = prevHtmlOverflow;
+      body.style.overflow = prevBodyOverflow;
+      html.style.overscrollBehavior = prevHtmlOverscroll;
+      body.style.overscrollBehavior = prevBodyOverscroll;
+      body.style.paddingRight = prevBodyPaddingRight;
+    };
+  }, [showLicenseModal]);
 
   return (
     <>
@@ -86,8 +182,8 @@ export const Footer: React.FC = () => {
 
       {/* SOFTWARE LICENSE & OWNERSHIP MODAL */}
       {showLicenseModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
-          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200 touch-none overscroll-none">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden overscroll-contain">
             
             {/* Modal Header */}
             <div className="p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/50 flex items-start justify-between gap-4">
@@ -119,7 +215,10 @@ export const Footer: React.FC = () => {
             </div>
 
             {/* Modal Body */}
-            <div className="p-6 overflow-y-auto space-y-5 text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+            <div
+              ref={modalBodyRef}
+              className="p-6 overflow-y-auto overscroll-contain touch-pan-y space-y-5 text-xs text-slate-600 dark:text-slate-300 leading-relaxed"
+            >
               
               {/* Licensor & Licensee Card */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-50 dark:bg-slate-800/60 p-4 rounded-2xl border border-slate-200/80 dark:border-slate-700/80">

@@ -1762,7 +1762,7 @@ export const Admin: React.FC = () => {
                     ).length;
 
                     return (
-                      <React.Fragment key={student.id}>
+                      <React.Fragment key={`${student.id}-${idx}`}>
                         {isNewCohort && (
                           <div className="pt-3 pb-1 px-1">
                             <div className="p-3 bg-gradient-to-r from-slate-100 to-slate-50 dark:from-slate-800 dark:to-slate-850 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-between shadow-xs">
@@ -1964,7 +1964,7 @@ export const Admin: React.FC = () => {
                         ).length;
 
                         return (
-                          <React.Fragment key={student.id}>
+                          <React.Fragment key={`${student.id}-${idx}`}>
                             {isNewCohort && (
                               <tr className="bg-gradient-to-r from-slate-100/95 via-slate-50/90 to-slate-100/95 dark:from-slate-800/95 dark:via-slate-850 dark:to-slate-800/95 border-y-2 border-slate-200 dark:border-slate-700/80">
                                 <td colSpan={8} className="py-2.5 px-4">
@@ -2000,7 +2000,7 @@ export const Admin: React.FC = () => {
                             )}
 
                             <tr
-                              key={student.id}
+                              key={`${student.id}-row-${idx}`}
                               className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors"
                             >
                             <td className="py-3.5 px-3 text-center font-mono text-xs text-slate-400 dark:text-slate-500">
@@ -3142,8 +3142,8 @@ export const Admin: React.FC = () => {
                       Preview of affected students:
                     </span>
                     <div className="max-h-24 overflow-y-auto space-y-1 pr-1 scrollbar-thin">
-                      {studentsPendingDelete.slice(0, 10).map((s) => (
-                        <div key={s.id} className="text-[11px] text-slate-700 dark:text-slate-300 flex items-center justify-between">
+                      {studentsPendingDelete.slice(0, 10).map((s, sIdx) => (
+                        <div key={`${s.id}-${sIdx}`} className="text-[11px] text-slate-700 dark:text-slate-300 flex items-center justify-between">
                           <span className="truncate font-medium">{s.name}</span>
                           <span className="font-mono text-[10px] text-slate-400 shrink-0 ml-2">{s.indexNumber}</span>
                         </div>

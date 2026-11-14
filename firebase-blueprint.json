@@ -161,6 +161,10 @@
         "biometricVerifiedStudentIds": {
           "type": "array",
           "description": "Array of student IDs verified with biometric fingerprint"
+        },
+        "gpsVerifiedStudentIds": {
+          "type": "array",
+          "description": "Array of student IDs verified via campus GPS geofence"
         }
       },
       "required": ["id", "date", "courseId", "isFinalized", "records"]
@@ -361,6 +365,166 @@
         }
       },
       "required": ["id", "autoLogBiometricScanSuccess", "logRetentionDays"]
+    },
+    "AuthorizedEmail": {
+      "title": "AuthorizedEmail",
+      "description": "Email-indexed authorization record for RBAC lookup",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "Lowercase Google email address",
+          "maxLength": 120
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name",
+          "maxLength": 100
+        },
+        "role": {
+          "type": "string",
+          "description": "Assigned role: hod, lecturer, or class_rep",
+          "maxLength": 30
+        },
+        "department": {
+          "type": "string",
+          "description": "Department or stream",
+          "maxLength": 100
+        },
+        "addedAt": {
+          "type": "string",
+          "description": "Date added"
+        }
+      },
+      "required": ["email", "role"]
+    },
+    "QrCheckInTicket": {
+      "title": "QrCheckInTicket",
+      "description": "Write-once student QR check-in ticket processed by authorized lecture terminal",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique ticket ID"
+        },
+        "submitterUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of submitting device"
+        },
+        "indexNumber": {
+          "type": "string",
+          "description": "Student index number",
+          "maxLength": 30
+        },
+        "courseId": {
+          "type": "string",
+          "description": "Target course ID",
+          "maxLength": 50
+        },
+        "courseCode": {
+          "type": "string",
+          "description": "Course code",
+          "maxLength": 30
+        },
+        "courseTitle": {
+          "type": "string",
+          "description": "Course title",
+          "maxLength": 150
+        },
+        "date": {
+          "type": "string",
+          "description": "Session date YYYY-MM-DD",
+          "maxLength": 20
+        },
+        "stream": {
+          "type": "string",
+          "description": "Class stream",
+          "maxLength": 40
+        },
+        "status": {
+          "type": "string",
+          "description": "Ticket status: pending, confirmed, or rejected",
+          "maxLength": 20
+        },
+        "message": {
+          "type": "string",
+          "description": "Processing status message",
+          "maxLength": 300
+        },
+        "studentName": {
+          "type": "string",
+          "description": "Confirmed student name",
+          "maxLength": 120
+        },
+        "studentIndex": {
+          "type": "string",
+          "description": "Confirmed student index number",
+          "maxLength": 30
+        },
+        "alreadyCheckedIn": {
+          "type": "boolean",
+          "description": "Whether student was already present"
+        },
+        "stats": {
+          "type": "object",
+          "description": "Attendance summary stats"
+        },
+        "gpsVerified": {
+          "type": "boolean",
+          "description": "Whether the student device passed GPS perimeter check"
+        },
+        "distanceMeters": {
+          "type": "number",
+          "description": "Measured GPS distance in meters from target hall center"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp"
+        }
+      },
+      "required": ["id", "submitterUid", "indexNumber", "courseId", "date", "status", "createdAt"]
+    },
+    "GpsGeofenceSettings": {
+      "title": "GpsGeofenceSettings",
+      "description": "Campus and lecture hall GPS geofence perimeter configuration stored under systemSettings/geofence",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether GPS geofence enforcement is enabled"
+        },
+        "campusName": {
+          "type": "string",
+          "description": "Label of the campus or pinned lecture hall",
+          "maxLength": 120
+        },
+        "latitude": {
+          "type": "number",
+          "description": "Target hall latitude"
+        },
+        "longitude": {
+          "type": "number",
+          "description": "Target hall longitude"
+        },
+        "radiusMeters": {
+          "type": "number",
+          "description": "Allowed geofence radius in meters (0 = bypassed)"
+        },
+        "rollingPinEnabled": {
+          "type": "boolean",
+          "description": "Whether 30-second rolling anti-cheat PIN is active"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "ISO timestamp of last GPS update"
+        },
+        "updatedBy": {
+          "type": "string",
+          "description": "Name or email of staff member who pinned hall GPS",
+          "maxLength": 120
+        }
+      },
+      "required": ["enabled", "campusName", "latitude", "longitude", "radiusMeters", "rollingPinEnabled"]
     }
   },
   "firestore": {
@@ -392,9 +556,17 @@
       "schema": "AuthorizedPersonnel",
       "description": "Registry of authorized HODs, Lecturers, and Class Reps"
     },
+    "/authorizedEmails/{email}": {
+      "schema": "AuthorizedEmail",
+      "description": "Email-keyed authorization lookup for verified staff and class reps"
+    },
     "/systemSettings/{settingId}": {
       "schema": "AutoLoggingSettings",
       "description": "System-wide automated logging and governance configuration"
+    },
+    "/qrCheckIns/{ticketId}": {
+      "schema": "QrCheckInTicket",
+      "description": "Student QR check-in queue isolated by submitter UID and processed by authorized staff"
     }
   }
 }

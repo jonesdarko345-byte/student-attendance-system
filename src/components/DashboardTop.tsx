@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
+import { inferLevelFromCourseCode, resolveDateForWeekday } from '../utils/timetableHelper';
 import { Course, TimetableSlot, Student } from '../types';
 import {
   Sun,
@@ -53,6 +54,7 @@ export const DashboardTop: React.FC = () => {
     isSyncing,
     loginWithGoogle,
     setActiveTab,
+    launchAttendanceSession,
     openDatabaseTab
   } = useApp();
 
@@ -104,6 +106,30 @@ export const DashboardTop: React.FC = () => {
   }
 
   const enrolledCount = students.length;
+  const distinctLevels: string[] = Array.from(
+    new Set<string>(
+      students
+        .map((s) => s.level?.trim())
+        .filter((lvl): lvl is string => Boolean(lvl))
+    )
+  ).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
+  const courseLevels: string[] = Array.from(
+    new Set<string>(
+      courses
+        .map((c) => inferLevelFromCourseCode(c.code))
+        .filter((lvl): lvl is string => Boolean(lvl))
+    )
+  ).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
+  const activeLevels = distinctLevels.length > 0 ? distinctLevels : courseLevels;
+  const enrolledLevelsLabel =
+    activeLevels.length === 1
+      ? activeLevels[0]
+      : activeLevels.length > 1
+      ? `${activeLevels[0]} – ${activeLevels[activeLevels.length - 1].replace('Level ', '')}`
+      : 'All Levels';
+
   const biometricEnrolledCount = students.filter(
     (s) => s.enrolledFingers && s.enrolledFingers.length > 0
   ).length;
@@ -117,6 +143,102 @@ export const DashboardTop: React.FC = () => {
     'present' | 'absent' | 'search' | 'biometrics' | 'schedule' | 'campus' | null
   >(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const modalScrollRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!modalType) return;
+
+    const html = document.documentElement;
+    const body = document.body;
+
+    const prevHtmlOverflow = html.style.overflow;
+    const prevBodyOverflow = body.style.overflow;
+    const prevHtmlOverscroll = html.style.overscrollBehavior;
+    const prevBodyOverscroll = body.style.overscrollBehavior;
+    const prevBodyPaddingRight = body.style.paddingRight;
+
+    const scrollbarWidth = window.innerWidth - html.clientWidth;
+    if (scrollbarWidth > 0) {
+      const computedPadding = parseFloat(window.getComputedStyle(body).paddingRight) || 0;
+      body.style.paddingRight = `${computedPadding + scrollbarWidth}px`;
+    }
+
+    html.style.overflow = 'hidden';
+    body.style.overflow = 'hidden';
+    html.style.overscrollBehavior = 'none';
+    body.style.overscrollBehavior = 'none';
+
+    let lastTouchY = 0;
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 1) {
+        lastTouchY = e.touches[0].clientY;
+      }
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      const scroller = modalScrollRef.current;
+      if (!scroller || !scroller.contains(e.target as Node)) {
+        e.preventDefault();
+        return;
+      }
+
+      if (scroller.scrollHeight <= scroller.clientHeight) {
+        e.preventDefault();
+        return;
+      }
+
+      const currentY = e.touches[0].clientY;
+      const deltaY = lastTouchY - currentY;
+      lastTouchY = currentY;
+
+      const atTop = scroller.scrollTop <= 0 && deltaY < 0;
+      const atBottom =
+        scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1 && deltaY > 0;
+
+      if (atTop || atBottom) {
+        e.preventDefault();
+      }
+    };
+
+    const onWheel = (e: WheelEvent) => {
+      const scroller = modalScrollRef.current;
+      if (!scroller || !scroller.contains(e.target as Node)) {
+        e.preventDefault();
+        return;
+      }
+
+      if (scroller.scrollHeight <= scroller.clientHeight) {
+        e.preventDefault();
+        return;
+      }
+
+      const atTop = scroller.scrollTop <= 0 && e.deltaY < 0;
+      const atBottom =
+        scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1 && e.deltaY > 0;
+
+      if (atTop || atBottom) {
+        e.preventDefault();
+      }
+    };
+
+    document.addEventListener('touchstart', onTouchStart, { passive: true });
+    document.addEventListener('touchmove', onTouchMove, { passive: false });
+    document.addEventListener('wheel', onWheel, { passive: false });
+
+    return () => {
+      document.removeEventListener('touchstart', onTouchStart);
+      document.removeEventListener('touchmove', onTouchMove);
+      document.removeEventListener('wheel', onWheel);
+
+      html.style.overflow = prevHtmlOverflow;
+      body.style.overflow = prevBodyOverflow;
+      html.style.overscrollBehavior = prevHtmlOverscroll;
+      body.style.overscrollBehavior = prevBodyOverscroll;
+      body.style.paddingRight = prevBodyPaddingRight;
+    };
+  }, [modalType]);
 
   // Filtered students for Quick Lookup
   const filteredStudents = students.filter(
@@ -282,7 +404,7 @@ export const DashboardTop: React.FC = () => {
                       Departmental Attendance & Compliance Oversight
                     </h2>
                     <p className="text-xs sm:text-sm text-slate-200">
-                      Audit Level 300 attendance rates, verify 75% exam compliance, and manage staff access.
+                      Audit {enrolledLevelsLabel} attendance rates, verify 75% exam compliance, and manage staff access.
                     </p>
                   </div>
                 ) : activeOrUpcomingSlot && primarySlotCourse ? (
@@ -345,7 +467,25 @@ export const DashboardTop: React.FC = () => {
                 ) : (
                   <>
                     <button
-                      onClick={() => setActiveTab('attendance')}
+                      onClick={() => {
+                        if (activeOrUpcomingSlot) {
+                          launchAttendanceSession({
+                            courseId: activeOrUpcomingSlot.courseId,
+                            stream: activeOrUpcomingSlot.stream,
+                            level: inferLevelFromCourseCode(primarySlotCourse?.code) || undefined,
+                            slotId: activeOrUpcomingSlot.id,
+                            date: todayStr
+                          });
+                        } else if (activeCourseId) {
+                          launchAttendanceSession({
+                            courseId: activeCourseId,
+                            level: inferLevelFromCourseCode(activeCourse?.code) || undefined,
+                            date: todayStr
+                          });
+                        } else {
+                          launchAttendanceSession();
+                        }
+                      }}
                       className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#8dc63f] to-[#7bb033] hover:from-[#96d244] hover:to-[#85bd37] text-[#003b5c] font-black text-xs sm:text-sm shadow-md hover:shadow-lg transition-all active:scale-95 cursor-pointer ring-2 ring-emerald-400/50"
                     >
                       <CalendarCheck className="w-4 h-4" />
@@ -448,20 +588,38 @@ export const DashboardTop: React.FC = () => {
                 {previewDaySlots.map((slot) => {
                   const course = courses.find((c) => c.id === slot.courseId);
                   const statusMeta = getCurrentSlotStatus(slot);
+                  const inferredLevel = inferLevelFromCourseCode(course?.code);
+                  const cohortTag = [inferredLevel, slot.stream].filter(Boolean).join(' · ');
 
                   return (
                     <div
                       key={slot.id}
-                      onClick={() => setActiveTab('attendance')}
+                      onClick={() =>
+                        launchAttendanceSession({
+                          courseId: slot.courseId,
+                          stream: slot.stream,
+                          level: inferredLevel || undefined,
+                          slotId: slot.id,
+                          date: resolveDateForWeekday(slot.dayOfWeek, currentTime)
+                        })
+                      }
                       className="group bg-white/10 hover:bg-white/15 transition-all p-3 rounded-xl border border-white/15 cursor-pointer flex flex-col justify-between space-y-2 hover:border-[#8dc63f]/50"
+                      title={`Click to open attendance for ${course?.code || 'course'}${cohortTag ? ` (${cohortTag})` : ''}`}
                     >
                       <div className="flex items-start justify-between gap-2">
-                        <span className="text-xs font-black text-white bg-white/20 px-2 py-0.5 rounded-md">
-                          {course?.code || 'COURSE'}
-                        </span>
-                        {previewDay === dayOfWeek && (
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-xs font-black text-white bg-white/20 px-2 py-0.5 rounded-md shrink-0">
+                            {course?.code || 'COURSE'}
+                          </span>
+                          {cohortTag && (
+                            <span className="text-[10px] font-semibold text-emerald-200/90 truncate">
+                              {cohortTag}
+                            </span>
+                          )}
+                        </div>
+                        {previewDay === dayOfWeek ? (
                           <span
-                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 ${
                               statusMeta.status === 'in-progress'
                                 ? 'bg-emerald-400 text-[#003b5c] animate-pulse'
                                 : statusMeta.status === 'upcoming'
@@ -470,6 +628,10 @@ export const DashboardTop: React.FC = () => {
                             }`}
                           >
                             {statusMeta.label}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-semibold text-[#8dc63f] opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                            Take Attendance →
                           </span>
                         )}
                       </div>
@@ -594,7 +756,7 @@ export const DashboardTop: React.FC = () => {
 
           <div className="mt-3 pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
             <span>BSc Information Tech</span>
-            <span className="font-bold text-[#007c82] dark:text-teal-400">Level 300</span>
+            <span className="font-bold text-[#007c82] dark:text-teal-400">{enrolledLevelsLabel}</span>
           </div>
         </div>
 
@@ -639,8 +801,8 @@ export const DashboardTop: React.FC = () => {
 
       {/* QUICK STUDENT SEARCH MODAL */}
       {modalType === 'search' && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-xl w-full p-6 space-y-4 max-h-[85vh] flex flex-col">
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 touch-none overscroll-none">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-xl w-full p-6 space-y-4 max-h-[85vh] flex flex-col overscroll-contain">
             <div className="flex items-start justify-between">
               <div>
                 <span className="text-[10px] font-black text-[#007c82] uppercase tracking-wider">
@@ -673,17 +835,20 @@ export const DashboardTop: React.FC = () => {
             </div>
 
             {/* Students List */}
-            <div className="flex-1 overflow-y-auto divide-y divide-slate-100 space-y-1 pr-1">
+            <div
+              ref={modalScrollRef}
+              className="flex-1 overflow-y-auto overscroll-contain touch-pan-y divide-y divide-slate-100 space-y-1 pr-1"
+            >
               {filteredStudents.length === 0 ? (
                 <div className="p-8 text-center text-xs text-slate-400">
                   No students found matching "{searchQuery}"
                 </div>
               ) : (
-                filteredStudents.map((s) => {
+                filteredStudents.map((s, idx) => {
                   const hasBio = s.enrolledFingers && s.enrolledFingers.length > 0;
                   return (
                     <div
-                      key={s.id}
+                      key={`${s.id}-${idx}`}
                       className="py-2.5 flex items-center justify-between gap-3 hover:bg-slate-50 px-2 rounded-xl"
                     >
                       <div className="flex items-center gap-3 min-w-0">
@@ -738,8 +903,8 @@ export const DashboardTop: React.FC = () => {
 
       {/* PRESENT STUDENTS MODAL */}
       {modalType === 'present' && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-md w-full p-6 space-y-4 max-h-[85vh] flex flex-col">
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 touch-none overscroll-none">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-md w-full p-6 space-y-4 max-h-[85vh] flex flex-col overscroll-contain">
             <div className="flex items-start justify-between">
               <div>
                 <span className="text-[10px] font-black text-emerald-600 uppercase tracking-wider">
@@ -758,7 +923,10 @@ export const DashboardTop: React.FC = () => {
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto divide-y divide-slate-100 pr-1 space-y-1">
+            <div
+              ref={modalScrollRef}
+              className="flex-1 overflow-y-auto overscroll-contain touch-pan-y divide-y divide-slate-100 pr-1 space-y-1"
+            >
               {presentStudentIds.length === 0 ? (
                 <div className="p-8 text-center text-xs text-slate-400">
                   No attendance has been saved yet for today's session.
@@ -797,7 +965,13 @@ export const DashboardTop: React.FC = () => {
               <button
                 onClick={() => {
                   setModalType(null);
-                  setActiveTab('attendance');
+                  launchAttendanceSession({
+                    courseId: activeCourseId,
+                    stream: activeOrUpcomingSlot?.stream || todaySlots[0]?.stream,
+                    level: inferLevelFromCourseCode(activeCourse?.code) || undefined,
+                    slotId: activeOrUpcomingSlot?.id || todaySlots[0]?.id,
+                    date: todayStr
+                  });
                 }}
                 className="px-4 py-2 bg-[#007c82] hover:bg-[#00666b] text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer"
               >
@@ -810,8 +984,8 @@ export const DashboardTop: React.FC = () => {
 
       {/* ABSENT STUDENTS MODAL */}
       {modalType === 'absent' && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-md w-full p-6 space-y-4 max-h-[85vh] flex flex-col">
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 touch-none overscroll-none">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-md w-full p-6 space-y-4 max-h-[85vh] flex flex-col overscroll-contain">
             <div className="flex items-start justify-between">
               <div>
                 <span className="text-[10px] font-black text-rose-600 uppercase tracking-wider">
@@ -830,7 +1004,10 @@ export const DashboardTop: React.FC = () => {
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto divide-y divide-slate-100 pr-1 space-y-1">
+            <div
+              ref={modalScrollRef}
+              className="flex-1 overflow-y-auto overscroll-contain touch-pan-y divide-y divide-slate-100 pr-1 space-y-1"
+            >
               {absentStudentIds.length === 0 ? (
                 <div className="p-8 text-center text-xs text-slate-400">
                   No students recorded absent for today.
@@ -861,7 +1038,13 @@ export const DashboardTop: React.FC = () => {
               <button
                 onClick={() => {
                   setModalType(null);
-                  setActiveTab('attendance');
+                  launchAttendanceSession({
+                    courseId: activeCourseId,
+                    stream: activeOrUpcomingSlot?.stream || todaySlots[0]?.stream,
+                    level: inferLevelFromCourseCode(activeCourse?.code) || undefined,
+                    slotId: activeOrUpcomingSlot?.id || todaySlots[0]?.id,
+                    date: todayStr
+                  });
                 }}
                 className="px-4 py-2 bg-[#007c82] hover:bg-[#00666b] text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer"
               >
@@ -874,8 +1057,8 @@ export const DashboardTop: React.FC = () => {
 
       {/* BIOMETRIC SUMMARY MODAL */}
       {modalType === 'biometrics' && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-md w-full p-6 space-y-4">
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 touch-none overscroll-none">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-md w-full p-6 space-y-4 overscroll-contain">
             <div className="flex items-start justify-between">
               <div>
                 <span className="text-[10px] font-black text-[#007c82] uppercase tracking-wider">
@@ -934,8 +1117,8 @@ export const DashboardTop: React.FC = () => {
 
       {/* WEEK TIMETABLE MODAL */}
       {modalType === 'schedule' && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-2xl w-full p-6 space-y-4 max-h-[85vh] flex flex-col">
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 touch-none overscroll-none">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-2xl w-full p-6 space-y-4 max-h-[85vh] flex flex-col overscroll-contain">
             <div className="flex items-start justify-between">
               <div>
                 <span className="text-[10px] font-black text-[#007c82] uppercase tracking-wider">
@@ -972,7 +1155,10 @@ export const DashboardTop: React.FC = () => {
             </div>
 
             {/* Day Slots List */}
-            <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+            <div
+              ref={modalScrollRef}
+              className="flex-1 overflow-y-auto overscroll-contain touch-pan-y space-y-2 pr-1"
+            >
               {previewDaySlots.length === 0 ? (
                 <div className="p-8 text-center text-xs text-slate-400 border border-dashed border-slate-200 rounded-2xl">
                   No classes scheduled for {WEEKDAYS.find((d) => d.id === previewDay)?.name}
@@ -980,17 +1166,33 @@ export const DashboardTop: React.FC = () => {
               ) : (
                 previewDaySlots.map((slot) => {
                   const course = courses.find((c) => c.id === slot.courseId);
+                  const inferredLevel = inferLevelFromCourseCode(course?.code);
                   return (
                     <div
                       key={slot.id}
-                      className="bg-slate-50 p-3 rounded-xl border border-slate-200 flex items-center justify-between gap-3"
+                      onClick={() => {
+                        setModalType(null);
+                        launchAttendanceSession({
+                          courseId: slot.courseId,
+                          stream: slot.stream,
+                          level: inferredLevel || undefined,
+                          slotId: slot.id,
+                          date: resolveDateForWeekday(slot.dayOfWeek, currentTime)
+                        });
+                      }}
+                      className="bg-slate-50 hover:bg-teal-50/60 p-3 rounded-xl border border-slate-200 hover:border-[#007c82]/50 flex items-center justify-between gap-3 cursor-pointer transition-colors"
                     >
                       <div className="space-y-0.5">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <span className="text-xs font-black text-[#007c82] bg-teal-50 px-2 py-0.5 rounded-md border border-teal-100">
                             {course?.code}
                           </span>
                           <span className="text-xs font-bold text-slate-900">{course?.title}</span>
+                          {(inferredLevel || slot.stream) && (
+                            <span className="text-[10px] font-semibold text-slate-500">
+                              {[inferredLevel, slot.stream].filter(Boolean).join(' · ')}
+                            </span>
+                          )}
                         </div>
                         <div className="text-[11px] text-slate-500 flex items-center gap-2">
                           <span>{course?.lecturer && course.lecturer !== 'Unassigned' ? course.lecturer : 'Lecturer Unassigned'}</span>
@@ -1003,9 +1205,10 @@ export const DashboardTop: React.FC = () => {
                       </div>
 
                       <div className="text-right shrink-0">
-                        <span className="text-xs font-bold text-slate-800 font-mono">
+                        <span className="text-xs font-bold text-slate-800 font-mono block">
                           {slot.startTime} – {slot.endTime}
                         </span>
+                        <span className="text-[10px] font-bold text-[#007c82]">Take Attendance →</span>
                       </div>
                     </div>
                   );
@@ -1036,8 +1239,8 @@ export const DashboardTop: React.FC = () => {
 
       {/* Interactive Modal 6: Campus Architectural Landmark Showcase */}
       {modalType === 'campus' && (
-        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-200">
-          <div className="bg-white w-full max-w-3xl rounded-3xl shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[90vh]">
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-200 touch-none overscroll-none">
+          <div className="bg-white w-full max-w-3xl rounded-3xl shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[90vh] overscroll-contain">
             {/* Modal Image Header */}
             <div className="relative h-64 sm:h-80 w-full overflow-hidden bg-slate-900">
               <img
@@ -1071,7 +1274,10 @@ export const DashboardTop: React.FC = () => {
             </div>
 
             {/* Modal Body: Information & Department Facilities */}
-            <div className="p-6 space-y-5 overflow-y-auto">
+            <div
+              ref={modalScrollRef}
+              className="p-6 space-y-5 overflow-y-auto overscroll-contain touch-pan-y"
+            >
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-100 space-y-1">
                   <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Campus Location</div>
@@ -1112,7 +1318,13 @@ export const DashboardTop: React.FC = () => {
                   type="button"
                   onClick={() => {
                     setModalType(null);
-                    setActiveTab('attendance');
+                    launchAttendanceSession({
+                      courseId: activeOrUpcomingSlot?.courseId || activeCourseId,
+                      stream: activeOrUpcomingSlot?.stream || todaySlots[0]?.stream,
+                      level: inferLevelFromCourseCode(primarySlotCourse?.code || activeCourse?.code) || undefined,
+                      slotId: activeOrUpcomingSlot?.id,
+                      date: todayStr
+                    });
                   }}
                   className="px-4 py-2 rounded-xl bg-[#007c82] text-white text-xs font-bold hover:bg-[#00666b] transition-colors cursor-pointer flex items-center gap-1.5"
                 >

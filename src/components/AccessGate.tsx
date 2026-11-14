@@ -1,6 +1,18 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { ShieldCheck, ShieldAlert, GraduationCap, Users, LogOut, CheckCircle2, Lock, Sparkles, Building2, Zap, ArrowRight } from 'lucide-react';
+import {
+  ShieldCheck,
+  ShieldAlert,
+  LogOut,
+  Lock,
+  QrCode,
+  Fingerprint,
+  BarChart3,
+  Sun,
+  Moon,
+  RefreshCw,
+  MapPin
+} from 'lucide-react';
 
 export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const {
@@ -9,30 +21,32 @@ export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }
     isAuthorized,
     loginWithGoogle,
     logoutUser,
-    currentUser,
-    isAutoSignIn,
-    toggleAutoSignIn,
-    autoSignInAsMaster
+    switchAccount,
+    isDarkMode,
+    toggleTheme
   } = useApp();
 
-  const [rememberDevice, setRememberDevice] = useState<boolean>(true);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [isSigningIn, setIsSigningIn] = useState<boolean>(false);
 
-  // 1. If Auto Sign-in is active OR user is authorized with Google credentials, grant instant access!
-  if (isAutoSignIn || (firebaseUser && isAuthorized)) {
+  // 1. Authorized verified personnel only
+  if (firebaseUser && !firebaseUser.isAnonymous && isAuthorized) {
     return <>{children}</>;
   }
 
-  // 2. Loading screen while Firebase Auth resolves
+  // 2. Loading screen while Firebase Auth & authorization status resolve
   if (isAuthLoading) {
     return (
-      <div className="min-h-screen bg-[#f8fafc] flex flex-col items-center justify-center p-4">
-        <div className="flex flex-col items-center gap-4 bg-white p-8 rounded-3xl shadow-xl border border-slate-200 text-center max-w-sm w-full">
+      <div className="min-h-screen bg-[#f6fafb] dark:bg-slate-950 flex flex-col items-center justify-center p-4 transition-colors">
+        <div className="flex flex-col items-center gap-4 bg-white dark:bg-slate-900 p-8 rounded-3xl shadow-xl border border-slate-200 dark:border-slate-800 text-center max-w-sm w-full">
           <div className="w-16 h-16 rounded-2xl bg-[#003b5c] p-2 flex items-center justify-center shadow-md animate-pulse">
             <img src="/assets/uenr_logo.jpg" alt="UENR" className="w-full h-full object-contain" />
           </div>
           <div>
-            <h2 className="text-lg font-bold text-[#003b5c]">UENR Attendance Portal</h2>
-            <p className="text-xs text-slate-500 mt-1">Verifying security credentials...</p>
+            <h2 className="text-lg font-bold text-[#003b5c] dark:text-white">UENR Attendance Portal</h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+              Verifying institutional credentials...
+            </p>
           </div>
           <div className="w-8 h-8 border-3 border-teal-600 border-t-transparent rounded-full animate-spin mt-2"></div>
         </div>
@@ -40,118 +54,41 @@ export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }
     );
   }
 
-  // 3. Not signed in and Auto Sign-in paused: Show login options
-  if (!firebaseUser) {
+  const formatAuthErrorMessage = (err: any): string | null => {
+    const code = err?.code || '';
+    if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+      return null;
+    }
+    if (code === 'auth/network-request-failed') {
+      return 'Network request to Google Sign-In failed. Check your internet connection, ensure Google/Firebase domains are not blocked by an ad-blocker or VPN, refresh the page, and try again.';
+    }
+    if (code === 'auth/popup-blocked') {
+      return 'The Google Sign-In popup was blocked by your browser. Please allow popups for this site and try again.';
+    }
+    if (code === 'auth/unauthorized-domain') {
+      return 'This domain is not currently listed under Authorized Domains in Firebase Authentication.';
+    }
+    return 'Sign-in could not be completed. Please allow popups and try again.';
+  };
+
+  const handleGoogleSignIn = async () => {
+    setAuthError(null);
+    setIsSigningIn(true);
+    try {
+      await loginWithGoogle(true);
+    } catch (err: any) {
+      const msg = formatAuthErrorMessage(err);
+      if (msg) setAuthError(msg);
+    } finally {
+      setIsSigningIn(false);
+    }
+  };
+
+  // 3. Signed in with a Google account that is NOT authorized by HOD/Lecturer
+  if (firebaseUser && !firebaseUser.isAnonymous && !isAuthorized) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-[#00243a] via-[#003b5c] to-[#005a78] flex flex-col items-center justify-center p-4 sm:p-6 text-slate-100">
-        <div className="max-w-md w-full bg-white text-slate-900 rounded-3xl shadow-2xl overflow-hidden border border-white/20">
-          
-          {/* Header Banner */}
-          <div className="bg-[#003b5c] p-6 text-center text-white relative">
-            <div className="mx-auto w-20 h-20 rounded-2xl bg-white p-2 shadow-lg mb-3 flex items-center justify-center border-2 border-emerald-400">
-              <img
-                src="/assets/uenr_logo.jpg"
-                alt="UENR Emblem"
-                className="w-full h-full object-contain"
-                onError={(e) => {
-                  (e.target as HTMLElement).style.display = 'none';
-                }}
-              />
-            </div>
-            <span className="inline-block text-[11px] font-bold uppercase tracking-widest text-[#8dc63f] bg-emerald-950/60 px-3 py-1 rounded-full border border-emerald-500/40 mb-1">
-              Department of Information Technology
-            </span>
-            <h1 className="text-xl sm:text-2xl font-black tracking-tight text-white">
-              Course Attendance System
-            </h1>
-            <p className="text-xs text-slate-300 mt-1">
-              University of Energy and Natural Resources, Sunyani
-            </p>
-          </div>
-
-          {/* Body content */}
-          <div className="p-6 sm:p-8 space-y-5">
-            {/* Auto Sign-In Option (Bypasses Gmail prompt) */}
-            <div className="p-4 rounded-2xl bg-emerald-50/90 border-2 border-emerald-500/40 space-y-3">
-              <div className="flex items-start gap-3">
-                <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center flex-shrink-0 shadow-sm">
-                  <Zap className="w-5 h-5 text-emerald-100" />
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-xs font-black uppercase tracking-wider text-emerald-950">
-                    Instant Auto Sign-In
-                  </h3>
-                  <p className="text-[11px] text-emerald-800 leading-relaxed mt-0.5">
-                    Launch directly into the portal as <strong>Jones Darko (HOD)</strong> without selecting or prompting for Gmail.
-                  </p>
-                </div>
-              </div>
-
-              <button
-                onClick={() => {
-                  if (rememberDevice) {
-                    toggleAutoSignIn(true);
-                  }
-                  autoSignInAsMaster();
-                }}
-                className="w-full py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white font-bold text-xs shadow-md shadow-emerald-700/20 transition-all flex items-center justify-center gap-2 cursor-pointer"
-              >
-                <Zap className="w-4 h-4 fill-emerald-200 text-emerald-200" />
-                <span>Auto Sign-In as HOD (No Gmail Prompt)</span>
-                <ArrowRight className="w-4 h-4 ml-auto" />
-              </button>
-            </div>
-
-            {/* Auto Sign-in Preference Checkbox */}
-            <label className="flex items-center gap-2.5 p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-700 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={rememberDevice}
-                onChange={(e) => setRememberDevice(e.target.checked)}
-                className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300"
-              />
-              <span className="font-semibold text-slate-800">
-                Remember this device (Always auto-sign in without asking)
-              </span>
-            </label>
-
-            {/* Standard Google Auth (Single-click with active Google session) */}
-            <div className="pt-1 border-t border-slate-100 space-y-2">
-              <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider text-center">
-                Or Sign In with Google
-              </p>
-              
-              <button
-                onClick={() => loginWithGoogle(false)}
-                className="w-full py-3 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-3 cursor-pointer"
-              >
-                <div className="bg-white p-1 rounded-md">
-                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24">
-                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
-                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
-                  </svg>
-                </div>
-                <span>Sign In with Active Google Account</span>
-              </button>
-            </div>
-
-            <p className="text-center text-[10px] text-slate-400">
-              Department of Information Technology · UENR Sunyani Campus
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // 4. Signed in with Google, but NOT registered on the Authorized Personnel List
-  if (!isAuthorized) {
-    return (
-      <div className="min-h-screen bg-slate-100 flex flex-col items-center justify-center p-4 sm:p-6 text-slate-900">
-        <div className="max-w-md w-full bg-white rounded-3xl shadow-2xl overflow-hidden border border-rose-200">
-          
+      <div className="min-h-screen bg-slate-100 dark:bg-slate-950 flex flex-col items-center justify-center p-4 sm:p-6 text-slate-900 dark:text-slate-100 transition-colors">
+        <div className="max-w-md w-full bg-white dark:bg-slate-900 rounded-3xl shadow-2xl overflow-hidden border border-rose-200 dark:border-rose-900/60">
           <div className="bg-rose-600 p-6 text-center text-white">
             <div className="w-16 h-16 rounded-2xl bg-white/20 mx-auto flex items-center justify-center mb-3">
               <ShieldAlert className="w-8 h-8 text-white" />
@@ -163,31 +100,51 @@ export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }
           </div>
 
           <div className="p-6 sm:p-8 space-y-6">
-            <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 text-xs space-y-2">
-              <p className="text-slate-500 font-medium">Logged in account:</p>
-              <div className="flex items-center gap-2 font-bold text-slate-800 break-all bg-white p-2 rounded-xl border border-slate-200">
+            <div className="bg-slate-50 dark:bg-slate-800/70 rounded-2xl p-4 border border-slate-200 dark:border-slate-700 text-xs space-y-2">
+              <p className="text-slate-500 dark:text-slate-400 font-medium">Signed-in account:</p>
+              <div className="flex items-center gap-2 font-bold text-slate-800 dark:text-white break-all bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700">
                 <span>{firebaseUser.email}</span>
               </div>
-              <p className="text-slate-600 leading-relaxed pt-1">
-                This email address is not currently listed in the Department of Information Technology authorized registry. Only authorized faculty and appointed class representatives are granted access.
+              <p className="text-slate-600 dark:text-slate-300 leading-relaxed pt-1">
+                This Google account is not listed in the Department of Information Technology &amp; Decision Sciences authorized personnel registry. No student, course, or timetable records are accessible without authorization from the Head of Department or Course Lecturer.
               </p>
             </div>
 
-            <div className="space-y-3 pt-2">
+            {authError && (
+              <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-xs font-semibold text-rose-700 dark:text-rose-300">
+                {authError}
+              </div>
+            )}
+
+            <div className="space-y-2.5 pt-1">
               <button
-                onClick={() => logoutUser()}
-                className="w-full py-3 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
+                type="button"
+                disabled={isSigningIn}
+                onClick={async () => {
+                  setAuthError(null);
+                  setIsSigningIn(true);
+                  try {
+                    await switchAccount();
+                  } catch (err: any) {
+                    const msg = formatAuthErrorMessage(err);
+                    if (msg) setAuthError(msg);
+                  } finally {
+                    setIsSigningIn(false);
+                  }
+                }}
+                className="w-full py-3 px-4 rounded-xl bg-[#003b5c] hover:bg-[#004e75] text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
               >
-                <LogOut className="w-4 h-4" />
-                <span>Sign Out & Try Another Account</span>
+                <RefreshCw className={`w-4 h-4 ${isSigningIn ? 'animate-spin' : ''}`} />
+                <span>{isSigningIn ? 'Opening Account Picker...' : 'Switch Google Account'}</span>
               </button>
 
               <button
-                onClick={() => autoSignInAsMaster()}
-                className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
+                type="button"
+                onClick={() => logoutUser()}
+                className="w-full py-3 px-4 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-bold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
               >
-                <Zap className="w-4 h-4" />
-                <span>Auto Sign-In as Primary HOD</span>
+                <LogOut className="w-4 h-4" />
+                <span>Sign Out &amp; Return to Landing Page</span>
               </button>
             </div>
           </div>
@@ -196,6 +153,193 @@ export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }
     );
   }
 
-  // 5. Authorized! Render application
-  return <>{children}</>;
+  // 4. Public Landing Page (Unauthenticated visitors see institutional UI only — ZERO private data)
+  return (
+    <div className="min-h-screen bg-[#f6fafb] dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col transition-colors duration-200">
+      {/* Public Institutional Header */}
+      <header className="bg-[#003b5c] text-white border-b border-[#002840] shadow-sm">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 h-16 sm:h-20 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-white p-1 shadow-sm border border-emerald-400/40 flex items-center justify-center shrink-0">
+              <img
+                src="/assets/uenr_logo.jpg"
+                alt="UENR Emblem"
+                className="w-full h-full object-contain"
+                onError={(e) => {
+                  (e.target as HTMLElement).style.display = 'none';
+                }}
+              />
+            </div>
+            <div className="min-w-0">
+              <h1 className="font-extrabold text-sm sm:text-lg tracking-tight text-white truncate">
+                UENR Attendance Portal
+              </h1>
+              <p className="text-[10px] sm:text-xs text-slate-300 font-medium truncate">
+                Department of Information Technology &amp; Decision Sciences
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2.5 shrink-0">
+            <button
+              type="button"
+              onClick={toggleTheme}
+              className="flex items-center justify-center w-9 h-9 rounded-xl bg-black/25 hover:bg-black/40 border border-white/15 text-slate-200 hover:text-amber-300 transition-all cursor-pointer"
+              title={isDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+              aria-label="Toggle light and dark mode"
+            >
+              {isDarkMode ? <Sun className="w-4 h-4 text-amber-300" /> : <Moon className="w-4 h-4 text-sky-200" />}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleGoogleSignIn}
+              disabled={isSigningIn}
+              className="px-3.5 py-2 rounded-xl bg-[#007c82] hover:bg-[#00666b] text-white text-xs font-bold shadow-sm border border-teal-400/30 transition-all flex items-center gap-2 cursor-pointer disabled:opacity-60"
+            >
+              <Lock className="w-3.5 h-3.5 text-emerald-300" />
+              <span>{isSigningIn ? 'Signing In...' : 'Staff Sign In'}</span>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Public Landing Content */}
+      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-14 flex flex-col justify-center">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-center">
+          {/* Left Hero Overview */}
+          <div className="lg:col-span-7 space-y-6">
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-teal-50 dark:bg-teal-950/60 border border-teal-200 dark:border-teal-800 text-[#007c82] dark:text-teal-300 text-xs font-bold">
+              <ShieldCheck className="w-4 h-4" />
+              <span>University of Energy &amp; Natural Resources · Sunyani</span>
+            </div>
+
+            <h2 className="text-3xl sm:text-4xl lg:text-5xl font-black tracking-tight text-[#003b5c] dark:text-white leading-[1.12]">
+              Biometric &amp; QR Course Attendance Management
+            </h2>
+
+            <p className="text-sm sm:text-base text-slate-600 dark:text-slate-300 leading-relaxed max-w-2xl">
+              An institutional academic integrity platform for managing classroom roll calls, geofenced live QR check-ins, and 75% examination eligibility compliance across ITDS courses.
+            </p>
+
+            {/* Feature Highlights (Zero private data displayed) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-2">
+              <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex items-start gap-3">
+                <div className="w-9 h-9 rounded-xl bg-teal-50 dark:bg-teal-950/60 text-[#007c82] dark:text-teal-400 flex items-center justify-center shrink-0">
+                  <QrCode className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold text-slate-900 dark:text-white">Live Classroom QR</h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
+                    Anti-hostel campus geofencing with 30-second rolling projector PIN verification.
+                  </p>
+                </div>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex items-start gap-3">
+                <div className="w-9 h-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                  <Fingerprint className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold text-slate-900 dark:text-white">Biometric Verification</h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
+                    Multi-finger scanner support and immutable audit trails for lecture sessions.
+                  </p>
+                </div>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex items-start gap-3">
+                <div className="w-9 h-9 rounded-xl bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-400 flex items-center justify-center shrink-0">
+                  <BarChart3 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold text-slate-900 dark:text-white">75% Exam Compliance</h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
+                    Automated eligibility tracking aligned with UENR academic regulations.
+                  </p>
+                </div>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex items-start gap-3">
+                <div className="w-9 h-9 rounded-xl bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-400 flex items-center justify-center shrink-0">
+                  <MapPin className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold text-slate-900 dark:text-white">Role-Gated Security</h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
+                    Protected database access strictly limited to HOD-authorized staff &amp; class reps.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Right Authorized Sign-In Card */}
+          <div className="lg:col-span-5">
+            <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+              <div className="bg-gradient-to-r from-[#00243a] via-[#003b5c] to-[#005a78] p-6 text-center text-white">
+                <div className="w-14 h-14 rounded-2xl bg-white/10 border border-white/20 mx-auto flex items-center justify-center mb-3">
+                  <Lock className="w-7 h-7 text-[#8dc63f]" />
+                </div>
+                <h3 className="text-lg font-black">Authorized Personnel Sign In</h3>
+                <p className="text-xs text-slate-200 mt-1">
+                  HOD, Course Lecturers &amp; Appointed Class Representatives
+                </p>
+              </div>
+
+              <div className="p-6 sm:p-7 space-y-5">
+                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-300 space-y-2 leading-relaxed">
+                  <p className="font-bold text-slate-800 dark:text-white flex items-center gap-1.5">
+                    <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                    <span>Protected Institutional Data</span>
+                  </p>
+                  <p>
+                    Student rosters, course catalogs, timetables, and attendance logs are hidden from public view. Sign in with your authorized Google account to access the portal.
+                  </p>
+                </div>
+
+                {authError && (
+                  <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-xs font-semibold text-rose-700 dark:text-rose-300">
+                    {authError}
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleGoogleSignIn}
+                  disabled={isSigningIn}
+                  className="w-full py-3.5 px-4 rounded-2xl bg-slate-900 dark:bg-emerald-600 hover:bg-slate-800 dark:hover:bg-emerald-700 text-white font-bold text-xs shadow-lg transition-all flex items-center justify-center gap-3 cursor-pointer disabled:opacity-60"
+                >
+                  <div className="bg-white p-1 rounded-md">
+                    <svg className="w-4 h-4" viewBox="0 0 24 24">
+                      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+                    </svg>
+                  </div>
+                  <span>{isSigningIn ? 'Authenticating with Google...' : 'Sign In with Authorized Google Account'}</span>
+                </button>
+
+                <div className="pt-3 border-t border-slate-100 dark:border-slate-800 text-center space-y-1.5">
+                  <p className="text-[11px] font-bold text-slate-700 dark:text-slate-300">
+                    Attending a Lecture as a Student?
+                  </p>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Scan the live Classroom QR Code displayed on your lecture hall projector screen to mark your attendance.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      {/* Public Footer */}
+      <footer className="border-t border-slate-200 dark:border-slate-800 py-4 text-center text-[11px] text-slate-500 dark:text-slate-400">
+        University of Energy and Natural Resources · Department of Information Technology &amp; Decision Sciences
+      </footer>
+    </div>
+  );
 };
+

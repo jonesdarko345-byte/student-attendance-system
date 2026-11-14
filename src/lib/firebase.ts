@@ -5,8 +5,6 @@ import {
   signInWithPopup,
   signOut,
   onAuthStateChanged,
-  setPersistence,
-  browserLocalPersistence,
   signInAnonymously,
   User as FirebaseUser
 } from 'firebase/auth';
@@ -54,14 +52,7 @@ export const db = (() => {
 // Initialize Firebase Authentication
 export const auth = getAuth(app);
 
-// Enforce browserLocalPersistence so authenticated sessions persist across reloads and tab closures
-setPersistence(auth, browserLocalPersistence).catch((err) => {
-  console.warn('[Firebase Auth] Persistence initialization notice:', err);
-});
-
 export const googleProvider = new GoogleAuthProvider();
-// NOTE: We deliberately do NOT hardcode prompt: 'select_account' here so that Google
-// can automatically reuse existing logged-in sessions without repeatedly prompting for Gmail!
 
 // Operation Types for Structured Error Diagnostics
 export enum OperationType {
@@ -138,13 +129,18 @@ testFirestoreConnection().catch(() => {});
 
 // Auth Helper Functions
 export async function signInWithGoogle(forceAccountPrompt = false) {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    const offlineErr = new Error('Your browser appears to be offline.') as Error & { code?: string };
+    offlineErr.code = 'auth/network-request-failed';
+    throw offlineErr;
+  }
+
   try {
+    const provider = new GoogleAuthProvider();
     if (forceAccountPrompt) {
-      googleProvider.setCustomParameters({ prompt: 'select_account' });
-    } else {
-      googleProvider.setCustomParameters({});
+      provider.setCustomParameters({ prompt: 'select_account' });
     }
-    const result = await signInWithPopup(auth, googleProvider);
+    const result = await signInWithPopup(auth, provider);
     return result.user;
   } catch (error) {
     console.error('Google Sign-In Error:', error);

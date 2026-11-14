@@ -42,6 +42,18 @@ export interface AttendanceRecord {
   finalizedAt?: string;
   records: Record<string, 'present' | 'absent'>; // studentId -> status
   biometricVerifiedStudentIds: string[];
+  gpsVerifiedStudentIds?: string[];
+}
+
+export interface GpsGeofenceSettings {
+  enabled: boolean;
+  campusName: string;
+  latitude: number;
+  longitude: number;
+  radiusMeters: number;
+  rollingPinEnabled: boolean;
+  updatedAt?: string;
+  updatedBy?: string;
 }
 
 export interface AuditLog {

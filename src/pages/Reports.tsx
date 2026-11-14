@@ -372,7 +372,7 @@ export const Reports: React.FC = () => {
             </div>
           ) : (
             studentStats.map((item, idx) => (
-              <div key={item.student.id} className="p-4 space-y-3 bg-white dark:bg-slate-900">
+              <div key={`${item.student.id}-${idx}`} className="p-4 space-y-3 bg-white dark:bg-slate-900">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
@@ -461,7 +461,7 @@ export const Reports: React.FC = () => {
                 </tr>
               ) : (
                 studentStats.map((item, idx) => (
-                <tr key={item.student.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors">
+                <tr key={`${item.student.id}-${idx}`} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors">
                   <td className="py-3.5 px-4 font-mono text-xs text-slate-400 dark:text-slate-500">{idx + 1}</td>
 
                   <td className="py-3.5 px-4 font-bold text-slate-900 dark:text-white">

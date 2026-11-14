@@ -1,7 +1,14 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { useApp } from '../context/AppContext';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { useApp, matchAttendanceStream } from '../context/AppContext';
+import {
+  getActiveTimetableSlot,
+  resolveCourseCohort,
+  streamsMatch
+} from '../utils/timetableHelper';
+import { DEFAULT_STREAMS, TimetableSlot } from '../types';
 import { BiometricAttendance } from '../components/BiometricAttendance';
 import { ClassroomQRModal } from '../components/ClassroomQRModal';
+import { GpsAttendancePanel } from '../components/GpsAttendancePanel';
 import {
   Calendar,
   Clock,
@@ -12,16 +19,17 @@ import {
   Unlock,
   Fingerprint,
   Search,
-  CheckCheck,
-  RotateCcw,
-  Sparkles,
   ShieldCheck,
   BookOpen,
   MapPin,
   Users,
   GraduationCap,
   Layers,
-  QrCode
+  QrCode,
+  SlidersHorizontal,
+  RotateCcw,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 
 export const Attendance: React.FC = () => {
@@ -33,7 +41,10 @@ export const Attendance: React.FC = () => {
     saveAttendance,
     unlockAttendance,
     setActiveTab,
-    currentUser
+    attendanceLaunchTarget,
+    clearAttendanceLaunchTarget,
+    currentUser,
+    geofenceSettings
   } = useApp();
 
   // Pick today's date (or last weekday if today is weekend)
@@ -45,18 +56,23 @@ export const Attendance: React.FC = () => {
     return d.toISOString().split('T')[0];
   };
 
-  const userStream = currentUser?.role === 'rep' && currentUser?.stream ? currentUser.stream : null;
+  const userStream = currentUser?.role === 'class_rep' && currentUser?.stream ? currentUser.stream : null;
 
   const [selectedDate, setSelectedDate] = useState<string>(getInitialDate());
-  const [selectedCourseId, setSelectedCourseId] = useState<string>(courses[0]?.id || '');
+  const [selectedCourseId, setSelectedCourseId] = useState<string>('');
   const [selectedLevel, setSelectedLevel] = useState<string>('all');
   const [selectedStream, setSelectedStream] = useState<string>(userStream || 'all');
-  const [viewMode, setViewMode] = useState<'manual' | 'biometric'>('manual');
+  const [showCohortOverride, setShowCohortOverride] = useState<boolean>(false);
+  const [isCohortManualOverride, setIsCohortManualOverride] = useState<boolean>(false);
+  const [viewMode, setViewMode] = useState<'manual' | 'biometric' | 'gps'>('manual');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [sessionRecords, setSessionRecords] = useState<Record<string, 'present' | 'absent'>>({});
   const [biometricVerifiedIds, setBiometricVerifiedIds] = useState<string[]>([]);
+  const [gpsVerifiedIds, setGpsVerifiedIds] = useState<string[]>([]);
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string>('');
   const [showQRModal, setShowQRModal] = useState<boolean>(false);
+
+  const userInteractedRef = useRef<boolean>(false);
 
   // Synchronize stream if Class Rep logs in
   useEffect(() => {
@@ -70,17 +86,88 @@ export const Attendance: React.FC = () => {
   const dayOfWeek = selectedDateObj.getDay(); // 0 = Sun, 1 = Mon ... 6 = Sat
   const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
 
-  // Find timetable sessions matching this weekday (and stream if specific)
-  const scheduledSlotsForDay = timetable.filter((slot) => {
-    if (slot.dayOfWeek !== dayOfWeek) return false;
-    if (selectedStream === 'all') return true;
-    if (slot.stream === selectedStream) return true;
-    if (!slot.stream || slot.stream === 'all') return true;
-    if (selectedStream === 'IT A' && (slot.stream === 'L200 IT-A' || slot.stream === 'IT 200 A')) return true;
-    if (selectedStream === 'L200 IT-A' && (slot.stream === 'IT A' || slot.stream === 'IT 200 A')) return true;
-    if (selectedStream === 'IT 200 A' && (slot.stream === 'IT A' || slot.stream === 'L200 IT-A')) return true;
-    return false;
-  });
+  // Scheduled slots for the selected day (filtered only if Class Rep is scoped to a stream)
+  const scheduledSlotsForDay = useMemo(() => {
+    return timetable.filter((slot) => {
+      if (slot.dayOfWeek !== dayOfWeek) return false;
+      if (userStream) return streamsMatch(slot.stream, userStream);
+      return true;
+    });
+  }, [timetable, dayOfWeek, userStream]);
+
+  // Unified helper: selecting a course automatically resolves its Level & Stream
+  const applyCourseSelection = (
+    courseId: string,
+    options?: {
+      date?: string;
+      preferredSlot?: TimetableSlot | null;
+      levelOverride?: string;
+      streamOverride?: string;
+      markUserAction?: boolean;
+    }
+  ) => {
+    if (options?.markUserAction) {
+      userInteractedRef.current = true;
+    }
+
+    const targetDate = options?.date || selectedDate;
+    const targetDay = new Date(`${targetDate}T00:00:00`).getDay();
+    setSelectedCourseId(courseId);
+
+    if (!courseId) {
+      setSelectedLevel('all');
+      setSelectedStream(userStream || 'all');
+      setIsCohortManualOverride(false);
+      return;
+    }
+
+    const targetCourse = courses.find((c) => c.id === courseId) || null;
+    const resolved = resolveCourseCohort({
+      course: targetCourse,
+      timetable,
+      students,
+      dayOfWeek: targetDay,
+      targetDate,
+      preferredSlot: options?.preferredSlot,
+      lockedStream: userStream
+    });
+
+    setSelectedLevel(options?.levelOverride || resolved.level);
+    setSelectedStream(userStream || options?.streamOverride || resolved.stream);
+    setIsCohortManualOverride(Boolean(options?.levelOverride || options?.streamOverride));
+  };
+
+  // Consume deep-link launch context from Dashboard
+  useEffect(() => {
+    if (!attendanceLaunchTarget || courses.length === 0) return;
+
+    const targetDate = attendanceLaunchTarget.date || selectedDate;
+    if (attendanceLaunchTarget.date) {
+      setSelectedDate(attendanceLaunchTarget.date);
+    }
+    if (attendanceLaunchTarget.viewMode) {
+      setViewMode(attendanceLaunchTarget.viewMode);
+    }
+
+    const targetCourseId =
+      attendanceLaunchTarget.courseId && courses.some((c) => c.id === attendanceLaunchTarget.courseId)
+        ? attendanceLaunchTarget.courseId
+        : courses[0]?.id || '';
+
+    const preferredSlot = attendanceLaunchTarget.slotId
+      ? timetable.find((s) => s.id === attendanceLaunchTarget.slotId) || null
+      : null;
+
+    applyCourseSelection(targetCourseId, {
+      date: targetDate,
+      preferredSlot,
+      levelOverride: attendanceLaunchTarget.level,
+      streamOverride: attendanceLaunchTarget.stream,
+      markUserAction: true
+    });
+    setIsCohortManualOverride(false);
+    clearAttendanceLaunchTarget();
+  }, [attendanceLaunchTarget, courses, timetable]);
 
   // Only reset course if the currently selected course was deleted
   useEffect(() => {
@@ -88,6 +175,59 @@ export const Attendance: React.FC = () => {
       setSelectedCourseId('');
     }
   }, [courses, selectedCourseId]);
+
+  // Initial Smart Auto-Selection when opening Attendance directly (no deep-link target)
+  useEffect(() => {
+    if (attendanceLaunchTarget || courses.length === 0) return;
+    if (userInteractedRef.current && selectedCourseId && courses.some((c) => c.id === selectedCourseId)) {
+      return;
+    }
+
+    const slots = timetable.filter((slot) => {
+      if (slot.dayOfWeek !== dayOfWeek) return false;
+      if (userStream) return streamsMatch(slot.stream, userStream);
+      return true;
+    });
+
+    if (slots.length > 0) {
+      const activeSlot = getActiveTimetableSlot(slots, selectedDate);
+      if (activeSlot && courses.some((c) => c.id === activeSlot.courseId)) {
+        applyCourseSelection(activeSlot.courseId, {
+          date: selectedDate,
+          preferredSlot: activeSlot
+        });
+        return;
+      }
+    }
+
+    if (!selectedCourseId || !courses.some((c) => c.id === selectedCourseId)) {
+      applyCourseSelection(courses[0].id, { date: selectedDate });
+    }
+  }, [courses, timetable, userStream, attendanceLaunchTarget]);
+
+  const handleDateChange = (newDate: string) => {
+    userInteractedRef.current = true;
+    setSelectedDate(newDate);
+    const newDay = new Date(`${newDate}T00:00:00`).getDay();
+    const daySlots = timetable.filter((slot) => {
+      if (slot.dayOfWeek !== newDay) return false;
+      if (userStream) return streamsMatch(slot.stream, userStream);
+      return true;
+    });
+    const activeForNewDay = getActiveTimetableSlot(daySlots, newDate);
+    if (activeForNewDay && courses.some((c) => c.id === activeForNewDay.courseId)) {
+      applyCourseSelection(activeForNewDay.courseId, {
+        date: newDate,
+        preferredSlot: activeForNewDay,
+        markUserAction: true
+      });
+    } else if (selectedCourseId) {
+      applyCourseSelection(selectedCourseId, {
+        date: newDate,
+        markUserAction: true
+      });
+    }
+  };
 
   // Helper to extract numeric level for sorting
   const extractLevelNumber = (lvl?: string) => {
@@ -101,12 +241,7 @@ export const Attendance: React.FC = () => {
     const list = students.filter((s) => {
       const matchesLevel = selectedLevel === 'all' || (s.level || 'Level 100') === selectedLevel;
       const sStream = s.stream || 'IT A';
-      const matchesStream =
-        selectedStream === 'all' ||
-        sStream === selectedStream ||
-        (selectedStream === 'IT A' && (sStream === 'L200 IT-A' || sStream === 'IT 200 A')) ||
-        (selectedStream === 'L200 IT-A' && (sStream === 'IT A' || sStream === 'IT 200 A')) ||
-        (selectedStream === 'IT 200 A' && (sStream === 'IT A' || sStream === 'L200 IT-A'));
+      const matchesStream = selectedStream === 'all' || streamsMatch(sStream, selectedStream);
       return matchesLevel && matchesStream;
     });
     return [...list].sort((a, b) => {
@@ -118,13 +253,22 @@ export const Attendance: React.FC = () => {
     });
   }, [students, selectedLevel, selectedStream]);
 
+  // Dynamic list of all known streams for the optional override selector
+  const availableStreamOptions = useMemo(() => {
+    const set = new Set<string>(DEFAULT_STREAMS);
+    timetable.forEach((s) => {
+      if (s.stream && s.stream !== 'all') set.add(s.stream);
+    });
+    students.forEach((s) => {
+      if (s.stream && s.stream !== 'all') set.add(s.stream);
+    });
+    return Array.from(set);
+  }, [timetable, students]);
+
   // Load existing attendance record for this date + course + stream
   const existingRecord = attendanceRecords.find((r) => {
     if (r.date !== selectedDate || r.courseId !== selectedCourseId) return false;
-    if (selectedStream === 'all') {
-      return !r.stream || r.stream === 'all';
-    }
-    return r.stream === selectedStream;
+    return matchAttendanceStream(r.stream, selectedStream);
   });
 
   const isFinalized = existingRecord?.isFinalized || false;
@@ -133,6 +277,7 @@ export const Attendance: React.FC = () => {
     if (existingRecord) {
       setSessionRecords(existingRecord.records || {});
       setBiometricVerifiedIds(existingRecord.biometricVerifiedStudentIds || []);
+      setGpsVerifiedIds(existingRecord.gpsVerifiedStudentIds || []);
     } else {
       // Default: empty or all absent for stream students
       const initial: Record<string, 'present' | 'absent'> = {};
@@ -141,13 +286,33 @@ export const Attendance: React.FC = () => {
       });
       setSessionRecords(initial);
       setBiometricVerifiedIds([]);
+      setGpsVerifiedIds([]);
     }
   }, [selectedDate, selectedCourseId, selectedStream, existingRecord, streamStudents.length]);
 
   const activeCourse = courses.find((c) => c.id === selectedCourseId);
-  const activeSlot = timetable.find(
-    (t) => t.courseId === selectedCourseId && t.dayOfWeek === dayOfWeek
+  const activeCourseCohortInfo = useMemo(
+    () =>
+      resolveCourseCohort({
+        course: activeCourse,
+        timetable,
+        students,
+        dayOfWeek,
+        targetDate: selectedDate,
+        lockedStream: userStream
+      }),
+    [activeCourse, timetable, students, dayOfWeek, selectedDate, userStream]
   );
+
+  const matchingSlotsForCourseToday = timetable.filter(
+    (t) =>
+      t.courseId === selectedCourseId &&
+      t.dayOfWeek === dayOfWeek &&
+      streamsMatch(t.stream, selectedStream)
+  );
+  const activeSlot =
+    getActiveTimetableSlot(matchingSlotsForCourseToday, selectedDate) ||
+    timetable.find((t) => t.courseId === selectedCourseId && t.dayOfWeek === dayOfWeek);
 
   // Handlers
   const handleMarkStatus = (studentId: string, status: 'present' | 'absent') => {
@@ -180,7 +345,8 @@ export const Attendance: React.FC = () => {
       { ...sessionRecords, [studentId]: 'present' },
       Array.from(new Set([...biometricVerifiedIds, studentId])),
       false,
-      selectedStream === 'all' ? undefined : selectedStream
+      selectedStream === 'all' ? undefined : selectedStream,
+      gpsVerifiedIds
     );
   };
 
@@ -191,7 +357,8 @@ export const Attendance: React.FC = () => {
       sessionRecords,
       biometricVerifiedIds,
       false,
-      selectedStream === 'all' ? undefined : selectedStream
+      selectedStream === 'all' ? undefined : selectedStream,
+      gpsVerifiedIds
     );
     setSaveSuccessMsg('Attendance draft saved successfully.');
     setTimeout(() => setSaveSuccessMsg(''), 3500);
@@ -206,7 +373,8 @@ export const Attendance: React.FC = () => {
         sessionRecords,
         biometricVerifiedIds,
         true,
-        selectedStream === 'all' ? undefined : selectedStream
+        selectedStream === 'all' ? undefined : selectedStream,
+        gpsVerifiedIds
       );
       setSaveSuccessMsg(`Attendance session for ${streamName} finalized and locked.`);
       setTimeout(() => setSaveSuccessMsg(''), 3500);
@@ -255,10 +423,10 @@ export const Attendance: React.FC = () => {
         </div>
 
         {/* Mode Selector Tabs */}
-        <div className="flex items-center bg-white dark:bg-slate-900 p-1 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm">
+        <div className="flex items-center bg-white dark:bg-slate-900 p-1 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-x-auto">
           <button
             onClick={() => setViewMode('manual')}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+            className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
               viewMode === 'manual'
                 ? 'bg-[#007c82] text-white shadow-sm'
                 : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
@@ -268,14 +436,25 @@ export const Attendance: React.FC = () => {
           </button>
           <button
             onClick={() => setViewMode('biometric')}
-            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
               viewMode === 'biometric'
                 ? 'bg-[#007c82] text-white shadow-sm'
                 : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
             <Fingerprint className="w-3.5 h-3.5" />
-            Biometric Scanner
+            <span>Biometric Scanner</span>
+          </button>
+          <button
+            onClick={() => setViewMode('gps')}
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+              viewMode === 'gps'
+                ? 'bg-[#007c82] text-white shadow-sm'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            <MapPin className="w-3.5 h-3.5" />
+            <span>GPS Attendance</span>
           </button>
         </div>
 
@@ -284,11 +463,11 @@ export const Attendance: React.FC = () => {
           id="launch-classroom-qr-btn"
           onClick={() => setShowQRModal(true)}
           disabled={!activeCourse}
-          className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white dark:bg-teal-700 dark:hover:bg-teal-600 text-xs font-bold transition-all shadow-sm flex items-center gap-2 cursor-pointer disabled:opacity-50"
-          title="Display high-visibility live QR code on classroom projector for 5-second student check-ins"
+          className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white dark:bg-teal-700 dark:hover:bg-teal-600 text-xs font-bold transition-all shadow-sm flex items-center gap-2 cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
+          title={`Display high-visibility live QR code for ${activeCourse?.code || 'lecture'} on classroom projector`}
         >
           <QrCode className="w-4 h-4 text-[#8dc63f] dark:text-emerald-300" />
-          <span>Projector QR Attendance</span>
+          <span>Projector QR {activeCourse ? `(${activeCourse.code})` : 'Attendance'}</span>
         </button>
       </div>
 
@@ -316,43 +495,26 @@ export const Attendance: React.FC = () => {
         </div>
       )}
 
-      {/* Date & Course Selection Panel */}
+      {/* Date & Course Selection Panel (Streamlined 1-Step Course-First Selector) */}
       <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
           
-          {/* 1. Date Picker */}
-          <div>
-            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
-              <Calendar className="w-3.5 h-3.5 text-[#007c82] dark:text-teal-400" />
-              Attendance Date
-            </label>
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-800 dark:text-slate-100 font-medium focus:outline-none focus:ring-2 focus:ring-[#007c82]"
-            />
-            <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 block">
-              {selectedDateObj.toLocaleDateString('en-GB', {
-                weekday: 'long',
-                day: 'numeric',
-                month: 'long',
-                year: 'numeric'
-              })}
-            </span>
-          </div>
-
-          {/* 2. Course Picker */}
-          <div>
-            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
-              <BookOpen className="w-3.5 h-3.5 text-[#007c82] dark:text-teal-400" />
-              Select Course
+          {/* 1. Primary Course Picker (Automatically resolves Level & Stream) */}
+          <div className="lg:col-span-6">
+            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+              <span className="flex items-center gap-1.5">
+                <BookOpen className="w-3.5 h-3.5 text-[#007c82] dark:text-teal-400" />
+                Select Course to Mark
+              </span>
+              <span className="text-[10px] font-semibold text-[#007c82] dark:text-teal-400 normal-case">
+                Auto-selects Level & Stream
+              </span>
             </label>
             <select
               value={selectedCourseId}
-              onChange={(e) => setSelectedCourseId(e.target.value)}
+              onChange={(e) => applyCourseSelection(e.target.value, { markUserAction: true })}
               disabled={courses.length === 0}
-              className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-800 dark:text-slate-100 font-medium focus:outline-none focus:ring-2 focus:ring-[#007c82] disabled:opacity-50"
+              className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2.5 text-sm text-slate-800 dark:text-slate-100 font-semibold focus:outline-none focus:ring-2 focus:ring-[#007c82] disabled:opacity-50"
             >
               {courses.length === 0 ? (
                 <option value="">No courses created yet</option>
@@ -366,133 +528,315 @@ export const Attendance: React.FC = () => {
                     const lecturerText =
                       course.lecturer && course.lecturer !== 'Unassigned'
                         ? ` (${course.lecturer})`
-                        : ' (No Lecturer Assigned)';
+                        : '';
                     return (
                       <option key={course.id} value={course.id}>
-                        {course.code} – {course.title}{lecturerText}{isScheduledToday ? ' ★ [Scheduled Today]' : ''}
+                        {course.code} – {course.title}{lecturerText}{isScheduledToday ? ' · Scheduled Today' : ''}
                       </option>
                     );
                   })}
                 </>
               )}
             </select>
-            <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 block truncate">
-              {activeCourse
-                ? activeCourse.lecturer && activeCourse.lecturer !== 'Unassigned'
-                  ? `Assigned Lecturer: ${activeCourse.lecturer}`
-                  : 'Lecturer: Unassigned (Assign in Timetable)'
-                : 'Select an assigned course to start attendance.'}
-            </span>
-          </div>
 
-          {/* 3. Class Division / Stream & Level Picker */}
-          <div>
-            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5 flex items-center justify-between">
-              <span className="flex items-center gap-1.5">
-                <Users className="w-3.5 h-3.5 text-[#007c82] dark:text-teal-400" />
-                Level & Division
+            <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1.5 flex items-center justify-between gap-2">
+              <span className="truncate">
+                {activeCourse
+                  ? activeCourse.lecturer && activeCourse.lecturer !== 'Unassigned'
+                    ? `Lecturer: ${activeCourse.lecturer}`
+                    : 'Lecturer: Unassigned (Assign in Timetable)'
+                  : 'Pick any course to auto-load its matching class roster.'}
               </span>
-              <span className="text-[10px] text-slate-400 font-mono">
-                {streamStudents.length} student{streamStudents.length === 1 ? '' : 's'}
-              </span>
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              <select
-                value={selectedLevel}
-                onChange={(e) => setSelectedLevel(e.target.value)}
-                className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-2.5 py-2 text-xs text-slate-800 dark:text-slate-100 font-bold focus:outline-none focus:ring-2 focus:ring-[#007c82]"
-                title="Filter by Academic Level"
-              >
-                <option value="all">All Levels</option>
-                <option value="Level 100">Level 100</option>
-                <option value="Level 200">Level 200</option>
-                <option value="Level 300">Level 300</option>
-                <option value="Level 400">Level 400</option>
-              </select>
-
-              {userStream ? (
-                <div className="w-full bg-teal-50 dark:bg-teal-950/40 border border-teal-300 dark:border-teal-800 rounded-xl px-2.5 py-2 text-xs text-[#007c82] dark:text-teal-300 font-bold flex items-center justify-between">
-                  <span>Stream {userStream}</span>
-                </div>
-              ) : (
-                <select
-                  value={selectedStream}
-                  onChange={(e) => setSelectedStream(e.target.value)}
-                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-2.5 py-2 text-xs text-slate-800 dark:text-slate-100 font-bold focus:outline-none focus:ring-2 focus:ring-[#007c82]"
-                  title="Filter by Division / Stream"
-                >
-                  <option value="all">All Streams</option>
-                  <option value="L200 IT-A">Division L200 IT-A (Level 200 Stream A)</option>
-                  <option value="IT A">Division IT A</option>
-                  <option value="IT B">Division IT B</option>
-                  <option value="IT C">Division IT C</option>
-                  <option value="IT D">Division IT D</option>
-                  <option value="IT E">Division IT E</option>
-                </select>
-              )}
             </div>
-            <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 block">
-              Cohorts separated by Level, then Stream
+
+            {/* Quick-switch buttons for today's scheduled lectures */}
+            {scheduledSlotsForDay.length > 0 && (
+              <div className="mt-2.5 pt-2.5 border-t border-slate-100 dark:border-slate-800 flex items-center gap-1.5 flex-wrap">
+                <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mr-0.5">
+                  Today:
+                </span>
+                {scheduledSlotsForDay.map((slot) => {
+                  const c = courses.find((crs) => crs.id === slot.courseId);
+                  if (!c) return null;
+                  const isCurrent =
+                    c.id === selectedCourseId &&
+                    (!slot.stream || selectedStream === 'all' || streamsMatch(slot.stream, selectedStream));
+                  return (
+                    <button
+                      key={slot.id}
+                      type="button"
+                      onClick={() =>
+                        applyCourseSelection(c.id, {
+                          preferredSlot: slot,
+                          markUserAction: true
+                        })
+                      }
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors cursor-pointer inline-flex items-center gap-1.5 border whitespace-nowrap ${
+                        isCurrent
+                          ? 'bg-[#007c82] text-white border-[#007c82]'
+                          : 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700'
+                      }`}
+                      title={`${c.code}: ${c.title}${slot.stream ? ` · ${slot.stream}` : ''}`}
+                    >
+                      <Clock className="w-3 h-3 shrink-0" />
+                      <span>{c.code}</span>
+                      <span className="opacity-75 font-mono text-[10px] tabular-nums">{slot.startTime}</span>
+                      {slot.stream && (
+                        <span className="opacity-80 text-[10px]">· {slot.stream}</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* 2. Attendance Date */}
+          <div className="lg:col-span-3">
+            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+              <Calendar className="w-3.5 h-3.5 text-[#007c82] dark:text-teal-400" />
+              Attendance Date
+            </label>
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={(e) => handleDateChange(e.target.value)}
+              className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2.5 text-sm text-slate-800 dark:text-slate-100 font-medium focus:outline-none focus:ring-2 focus:ring-[#007c82]"
+            />
+            <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1.5 block">
+              {selectedDateObj.toLocaleDateString('en-GB', {
+                weekday: 'long',
+                day: 'numeric',
+                month: 'short',
+                year: 'numeric'
+              })}
             </span>
           </div>
 
-          {/* 4. Session Status & Lock Badge */}
-          <div className="flex flex-col justify-between bg-slate-50 dark:bg-slate-800/60 p-3 rounded-xl border border-slate-200 dark:border-slate-700">
-            <span className="text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
-              Session Integrity
-            </span>
-            <div className="flex items-center justify-between mt-2">
-              {isFinalized ? (
-                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-300 border border-amber-300 dark:border-amber-800 text-xs font-bold">
-                  <Lock className="w-3.5 h-3.5 text-amber-700 dark:text-amber-400" />
-                  Locked
-                </div>
-              ) : (
-                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-900 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 text-xs font-bold">
-                  <Unlock className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" />
-                  Open
-                </div>
-              )}
-
-              {isFinalized ? (
+          {/* 3. Session Status & Lock State */}
+          <div className="lg:col-span-3 flex flex-col justify-between bg-slate-50 dark:bg-slate-800/60 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
+                Session Status
+              </span>
+              {isFinalized && (
                 <button
                   onClick={handleUnlock}
-                  className="text-xs font-bold text-teal-700 dark:text-teal-400 hover:text-teal-900 underline cursor-pointer"
+                  className="text-xs font-bold text-[#007c82] dark:text-teal-400 hover:underline cursor-pointer"
                 >
                   Unlock
                 </button>
-              ) : null}
+              )}
             </div>
-            <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-              {isFinalized ? 'Session locked' : 'Draft / Active'}
+            <div className="flex items-center justify-between gap-2 mt-2">
+              {isFinalized ? (
+                <span className="inline-flex items-center gap-1.5 text-xs font-bold text-amber-800 dark:text-amber-300">
+                  <Lock className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                  Finalized & Locked
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 dark:text-emerald-400">
+                  <Unlock className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                  Open for Roll Call
+                </span>
+              )}
+              <span className="font-mono text-xs font-bold text-slate-600 dark:text-slate-300 tabular-nums">
+                {streamStudents.length} student{streamStudents.length === 1 ? '' : 's'}
+              </span>
             </div>
           </div>
         </div>
 
+        {/* Auto-Detected Cohort Bar (Replaces mandatory manual Level + Stream dropdowns) */}
+        {activeCourse && (
+          <div className="rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/80 p-3.5 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-x-5 gap-y-2 flex-wrap text-xs">
+                <div className="flex items-center gap-1.5 text-slate-700 dark:text-slate-200">
+                  <GraduationCap className="w-4 h-4 text-[#007c82] dark:text-teal-400 shrink-0" />
+                  <span className="text-slate-500 dark:text-slate-400">Level:</span>
+                  <strong className="text-slate-900 dark:text-white">
+                    {selectedLevel === 'all' ? 'All Levels' : selectedLevel}
+                  </strong>
+                </div>
+
+                <div className="flex items-center gap-1.5 text-slate-700 dark:text-slate-200">
+                  <Layers className="w-4 h-4 text-[#007c82] dark:text-teal-400 shrink-0" />
+                  <span className="text-slate-500 dark:text-slate-400">Stream:</span>
+                  <strong className="text-slate-900 dark:text-white">
+                    {selectedStream === 'all' ? 'All Streams' : selectedStream}
+                  </strong>
+                </div>
+
+                <div className="flex items-center gap-1.5 text-slate-700 dark:text-slate-200">
+                  <Users className="w-4 h-4 text-[#007c82] dark:text-teal-400 shrink-0" />
+                  <span className="tabular-nums font-semibold text-slate-900 dark:text-white">
+                    {streamStudents.length} student{streamStudents.length === 1 ? '' : 's'} matched
+                  </span>
+                </div>
+
+                {!isWeekend && activeSlot && (
+                  <div className="flex items-center gap-1.5 text-teal-800 dark:text-teal-300 font-medium">
+                    <Clock className="w-3.5 h-3.5 text-[#007c82] dark:text-teal-400 shrink-0" />
+                    <span className="tabular-nums">
+                      {activeSlot.startTime} – {activeSlot.endTime} · {activeSlot.venue}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                {!userStream && isCohortManualOverride && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      applyCourseSelection(selectedCourseId, { markUserAction: true });
+                      setShowCohortOverride(false);
+                    }}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-[#007c82] dark:text-teal-300 bg-teal-50 dark:bg-teal-950/50 border border-teal-200 dark:border-teal-800 hover:bg-teal-100 cursor-pointer whitespace-nowrap"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    Reset Auto
+                  </button>
+                )}
+
+                {userStream ? (
+                  <span className="text-[11px] font-semibold text-[#007c82] dark:text-teal-300 whitespace-nowrap">
+                    Scoped to {userStream}
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setShowCohortOverride((prev) => !prev)}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 cursor-pointer whitespace-nowrap"
+                  >
+                    <SlidersHorizontal className="w-3 h-3" />
+                    <span>{showCohortOverride ? 'Hide Filters' : 'Adjust Level / Stream'}</span>
+                    {showCohortOverride ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* 1-click stream switcher when a course spans multiple streams on the timetable */}
+            {!userStream && activeCourseCohortInfo.availableStreams.length > 1 && (
+              <div className="flex items-center gap-1.5 flex-wrap pt-2 border-t border-slate-200/70 dark:border-slate-700/60 text-[11px]">
+                <span className="text-slate-500 dark:text-slate-400 font-medium mr-1">Course Streams:</span>
+                {activeCourseCohortInfo.availableStreams.map((st) => (
+                  <button
+                    key={st}
+                    type="button"
+                    onClick={() => {
+                      setSelectedStream(st);
+                      setIsCohortManualOverride(false);
+                    }}
+                    className={`px-2 py-0.5 rounded-md font-semibold cursor-pointer transition-colors ${
+                      streamsMatch(selectedStream, st) && selectedStream !== 'all'
+                        ? 'bg-[#007c82] text-white'
+                        : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    {st}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedStream('all');
+                    setIsCohortManualOverride(false);
+                  }}
+                  className={`px-2 py-0.5 rounded-md font-semibold cursor-pointer transition-colors ${
+                    selectedStream === 'all'
+                      ? 'bg-[#007c82] text-white'
+                      : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
+                  }`}
+                >
+                  All Streams
+                </button>
+              </div>
+            )}
+
+            {/* Optional Manual Level & Stream Override Drawer */}
+            {!userStream && showCohortOverride && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2.5 border-t border-slate-200 dark:border-slate-700">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">
+                    Override Academic Level
+                  </label>
+                  <select
+                    value={selectedLevel}
+                    onChange={(e) => {
+                      setSelectedLevel(e.target.value);
+                      setIsCohortManualOverride(true);
+                    }}
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-800 dark:text-slate-100 font-semibold focus:outline-none focus:ring-2 focus:ring-[#007c82]"
+                  >
+                    <option value="all">All Levels</option>
+                    <option value="Level 100">Level 100</option>
+                    <option value="Level 200">Level 200</option>
+                    <option value="Level 300">Level 300</option>
+                    <option value="Level 400">Level 400</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">
+                    Override Class Stream / Division
+                  </label>
+                  <select
+                    value={selectedStream}
+                    onChange={(e) => {
+                      setSelectedStream(e.target.value);
+                      setIsCohortManualOverride(true);
+                    }}
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-800 dark:text-slate-100 font-semibold focus:outline-none focus:ring-2 focus:ring-[#007c82]"
+                  >
+                    <option value="all">All Streams</option>
+                    {availableStreamOptions.map((st) => (
+                      <option key={st} value={st}>
+                        {st}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Weekend Alert Message */}
         {isWeekend && (
-          <div className="bg-amber-50 border border-amber-300 rounded-xl p-3.5 flex items-center gap-3 text-amber-900 text-xs sm:text-sm">
-            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0" />
+          <div className="bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-xl p-3.5 flex items-center gap-3 text-amber-900 dark:text-amber-200 text-xs sm:text-sm">
+            <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0" />
             <div>
-              <strong>⚠️ Weekend Selected:</strong> Regular university timetable lectures are held on weekdays (Monday to Friday). Attendance is disabled unless a special scheduled makeup session exists.
+              <strong>Weekend Selected:</strong> Regular university timetable lectures are held on weekdays (Monday to Friday). Select a weekday or proceed only for a special makeup session.
             </div>
           </div>
         )}
 
-        {/* Timetable Session Notice */}
-        {!isWeekend && activeSlot && (
-          <div className="bg-teal-50/70 border border-teal-200 rounded-xl p-3 flex items-center justify-between text-xs text-teal-900">
-            <div className="flex items-center gap-2">
-              <Clock className="w-4 h-4 text-[#007c82]" />
-              <span>
-                <strong>Scheduled Timetable Slot:</strong> {activeSlot.startTime} – {activeSlot.endTime} · Venue: {activeSlot.venue}
-              </span>
-            </div>
-            <span className="hidden sm:inline-block font-semibold text-[#007c82]">
-              Verified Timetable Session
+        {/* Active Campus GPS Geofence Summary */}
+        <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+          <div className="flex items-center gap-2 text-slate-600 dark:text-slate-300">
+            <MapPin className="w-3.5 h-3.5 text-[#007c82] dark:text-teal-400 shrink-0" />
+            <span>
+              <strong>GPS Geofence:</strong>{' '}
+              {geofenceSettings.radiusMeters > 0
+                ? `${geofenceSettings.campusName} · Radius ${
+                    geofenceSettings.radiusMeters >= 1000
+                      ? `${(geofenceSettings.radiusMeters / 1000).toFixed(1)} km`
+                      : `${geofenceSettings.radiusMeters} m`
+                  }`
+                : 'Bypassed (Online Mode)'}
             </span>
           </div>
-        )}
+          <button
+            type="button"
+            onClick={() => setViewMode('gps')}
+            className="text-xs font-semibold text-[#007c82] dark:text-teal-400 hover:underline text-left sm:text-right cursor-pointer whitespace-nowrap"
+          >
+            {viewMode === 'gps' ? 'Viewing GPS Verification Panel' : 'Open GPS Verification & Hall Pinning →'}
+          </button>
+        </div>
       </div>
 
       {/* ACTIVE SESSION OR EMPTY STATE */}
@@ -506,7 +850,7 @@ export const Attendance: React.FC = () => {
               No Lecture Selected
             </h3>
             <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 leading-relaxed">
-              Lectures and assigned lecturers will only appear when you explicitly select a course above or schedule one in Timetable.
+              Pick a course above or tap one of today's scheduled sessions to automatically load its level and stream roster.
             </p>
           </div>
           {scheduledSlotsForDay.length > 0 && (
@@ -522,7 +866,12 @@ export const Attendance: React.FC = () => {
                     <button
                       key={slot.id}
                       type="button"
-                      onClick={() => setSelectedCourseId(c.id)}
+                      onClick={() =>
+                        applyCourseSelection(c.id, {
+                          preferredSlot: slot,
+                          markUserAction: true
+                        })
+                      }
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-[#007c82]/10 hover:bg-[#007c82]/20 text-[#007c82] dark:text-teal-300 border border-[#007c82]/20 transition-all cursor-pointer"
                     >
                       <Clock className="w-3.5 h-3.5" />
@@ -548,6 +897,22 @@ export const Attendance: React.FC = () => {
               stream={selectedStream === 'all' ? undefined : selectedStream}
               onAttendanceMarked={handleBiometricMarked}
               onFinalizeSession={handleFinalize}
+            />
+          )}
+
+          {/* GPS PERIMETER & LOCATION CHECK-IN MODE */}
+          {viewMode === 'gps' && (
+            <GpsAttendancePanel
+              date={selectedDate}
+              course={activeCourse}
+              stream={selectedStream}
+              venueHint={activeSlot?.venue}
+              students={streamStudents}
+              sessionRecords={sessionRecords}
+              biometricVerifiedIds={biometricVerifiedIds}
+              gpsVerifiedIds={gpsVerifiedIds}
+              isSessionFinalized={isFinalized}
+              onOpenQRModal={() => setShowQRModal(true)}
             />
           )}
 
@@ -626,11 +991,12 @@ export const Attendance: React.FC = () => {
                 const status = sessionRecords[student.id] || 'absent';
                 const isPresent = status === 'present';
                 const isBiometricVerified = biometricVerifiedIds.includes(student.id);
+                const isGpsVerified = gpsVerifiedIds.includes(student.id);
                 const isEnrolled = student.enrolledFingers && student.enrolledFingers.length > 0;
 
                 return (
                   <div
-                    key={student.id}
+                    key={`${student.id}-${idx}`}
                     className={`p-3.5 space-y-3 transition-colors ${
                       isPresent
                         ? 'bg-emerald-50/30 dark:bg-emerald-950/20'
@@ -662,22 +1028,28 @@ export const Attendance: React.FC = () => {
                         {student.indexNumber}
                       </span>
 
-                      <div>
+                      <div className="flex items-center gap-2">
+                        {isGpsVerified && (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 dark:text-emerald-400">
+                            <MapPin className="w-3 h-3" />
+                            GPS-Verified
+                          </span>
+                        )}
                         {isBiometricVerified ? (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-teal-100 dark:bg-teal-950/60 text-teal-800 dark:text-teal-300 text-[10px] font-bold">
                             <Fingerprint className="w-3 h-3 text-teal-600 dark:text-teal-400" />
                             Bio-Verified
                           </span>
-                        ) : isEnrolled ? (
+                        ) : !isGpsVerified && isEnrolled ? (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-[10px]">
                             <Fingerprint className="w-3 h-3 text-slate-400" />
                             {student.enrolledFingers.length} finger(s)
                           </span>
-                        ) : (
+                        ) : !isGpsVerified ? (
                           <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium">
                             Not Enrolled
                           </span>
-                        )}
+                        ) : null}
                       </div>
                     </div>
 
@@ -751,11 +1123,12 @@ export const Attendance: React.FC = () => {
                     const status = sessionRecords[student.id] || 'absent';
                     const isPresent = status === 'present';
                     const isBiometricVerified = biometricVerifiedIds.includes(student.id);
+                    const isGpsVerified = gpsVerifiedIds.includes(student.id);
                     const isEnrolled = student.enrolledFingers && student.enrolledFingers.length > 0;
 
                     return (
                       <tr
-                        key={student.id}
+                        key={`${student.id}-${idx}`}
                         className={`hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors ${
                           isPresent ? 'bg-emerald-50/20 dark:bg-emerald-950/20' : ''
                         }`}
@@ -780,21 +1153,29 @@ export const Attendance: React.FC = () => {
                         </td>
 
                         <td className="py-3.5 px-4">
-                          {isBiometricVerified ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-teal-100 dark:bg-teal-950/60 text-teal-800 dark:text-teal-300 text-[11px] font-bold">
-                              <Fingerprint className="w-3 h-3 text-teal-600 dark:text-teal-400" />
-                              Bio-Verified
-                            </span>
-                          ) : isEnrolled ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-[11px]">
-                              <Fingerprint className="w-3 h-3 text-slate-400" />
-                              {student.enrolledFingers.length} finger(s)
-                            </span>
-                          ) : (
-                            <span className="text-[11px] text-amber-600 dark:text-amber-400 font-medium">
-                              Not Enrolled
-                            </span>
-                          )}
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {isGpsVerified && (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 dark:text-emerald-400">
+                                <MapPin className="w-3 h-3" />
+                                GPS-Verified
+                              </span>
+                            )}
+                            {isBiometricVerified ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-teal-100 dark:bg-teal-950/60 text-teal-800 dark:text-teal-300 text-[11px] font-bold">
+                                <Fingerprint className="w-3 h-3 text-teal-600 dark:text-teal-400" />
+                                Bio-Verified
+                              </span>
+                            ) : !isGpsVerified && isEnrolled ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-[11px]">
+                                <Fingerprint className="w-3 h-3 text-slate-400" />
+                                {student.enrolledFingers.length} finger(s)
+                              </span>
+                            ) : !isGpsVerified ? (
+                              <span className="text-[11px] text-amber-600 dark:text-amber-400 font-medium">
+                                Not Enrolled
+                              </span>
+                            ) : null}
+                          </div>
                         </td>
 
                         <td className="py-3.5 px-4 text-center">
@@ -876,9 +1257,10 @@ export const Attendance: React.FC = () => {
       <ClassroomQRModal
         isOpen={showQRModal}
         onClose={() => setShowQRModal(false)}
-        course={activeCourse}
+        course={activeCourse || null}
         date={selectedDate}
         stream={selectedStream}
+        onSelectCourse={(newId) => applyCourseSelection(newId, { markUserAction: true })}
       />
     </div>
   );

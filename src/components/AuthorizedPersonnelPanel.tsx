@@ -12,7 +12,8 @@ import {
   AlertCircle,
   KeyRound,
   Mail,
-  BookOpen
+  BookOpen,
+  Lock
 } from 'lucide-react';
 
 export const AuthorizedPersonnelPanel: React.FC = () => {

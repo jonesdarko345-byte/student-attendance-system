@@ -12,7 +12,6 @@ import {
   CheckCircle2,
   AlertTriangle,
   RotateCcw,
-  Zap,
   Lock,
   CloudCheck
 } from 'lucide-react';
@@ -22,8 +21,6 @@ export const AutoLoggingSettingsPanel: React.FC = () => {
   const {
     autoLoggingSettings,
     updateAutoLoggingSettings,
-    isAutoSignIn,
-    toggleAutoSignIn,
     currentUser,
     addAuditLog
   } = useApp();
@@ -142,50 +139,8 @@ export const AutoLoggingSettingsPanel: React.FC = () => {
       </div>
 
       <div className="p-6 space-y-8 divide-y divide-slate-100 dark:divide-slate-800/80">
-        {/* Section 0: Device Authentication & Auto Sign-In */}
-        <div className="space-y-4">
-          <div className="flex items-center gap-2">
-            <Zap className="w-4 h-4 text-amber-500 fill-amber-400" />
-            <h4 className="text-sm font-bold text-slate-900 dark:text-white">
-              Device Authentication & Auto Sign-In
-            </h4>
-          </div>
-
-          <div className="p-4 rounded-xl bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200/80 dark:border-amber-900/40 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="space-y-1 max-w-xl">
-              <div className="flex items-center gap-2">
-                <span className="font-bold text-xs text-amber-950 dark:text-amber-200">
-                  Instant Device Auto-Sign In
-                </span>
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                  isAutoSignIn
-                    ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300'
-                    : 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-300'
-                }`}>
-                  {isAutoSignIn ? 'Active' : 'Disabled'}
-                </span>
-              </div>
-              <p className="text-xs text-amber-800 dark:text-amber-300/80 leading-relaxed">
-                When enabled, the app automatically activates your verified HOD/Lecturer profile without prompting for Gmail account selection on app start or page refresh.
-              </p>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => toggleAutoSignIn()}
-              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex-shrink-0 ${
-                isAutoSignIn
-                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm'
-                  : 'bg-slate-900 hover:bg-slate-800 text-white shadow-sm'
-              }`}
-            >
-              {isAutoSignIn ? 'Auto Sign-In Enabled' : 'Enable Auto Sign-In'}
-            </button>
-          </div>
-        </div>
-
         {/* Section 1: Biometric & Scanning Automation */}
-        <div className="pt-6 space-y-4">
+        <div className="space-y-4">
           <div className="flex items-center gap-2">
             <Fingerprint className="w-4 h-4 text-teal-600 dark:text-teal-400" />
             <h4 className="text-sm font-bold text-slate-900 dark:text-white">

@@ -298,12 +298,12 @@ export const BiometricAttendance: React.FC<BiometricAttendanceProps> = ({
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-60 overflow-y-auto pr-1">
-            {activeStudents.map((student) => {
+            {activeStudents.map((student, idx) => {
               const isPresent = presentStudentIds.includes(student.id);
               const isEnrolled = student.enrolledFingers && student.enrolledFingers.length > 0;
               return (
                 <div
-                  key={student.id}
+                  key={`${student.id}-${idx}`}
                   className={`flex items-center justify-between p-2.5 rounded-xl border text-xs transition-colors ${
                     isPresent
                       ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950'

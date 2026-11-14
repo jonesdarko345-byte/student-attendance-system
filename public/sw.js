@@ -1,7 +1,7 @@
 // UENR Course Attendance & Timetable Service Worker
-// Provides offline caching for poor or disconnected network conditions
+// Provides offline caching strictly for same-origin static shell assets without interfering with Firebase Auth or Google APIs
 
-const CACHE_NAME = 'uenr-timetable-cache-v1';
+const CACHE_NAME = 'uenr-timetable-cache-v2';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -14,7 +14,6 @@ const STATIC_ASSETS = [
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      console.log('[Service Worker] Precaching application shell for offline access');
       return cache.addAll(STATIC_ASSETS).catch((err) => {
         console.warn('[Service Worker] Asset precache partial warning:', err);
       });
@@ -22,35 +21,47 @@ self.addEventListener('install', (event) => {
   );
 });
 
-// Activate Event: Clean up outdated caches
+// Activate Event: Clean up outdated caches (including broken v1 caches)
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames
           .filter((name) => name !== CACHE_NAME && name.startsWith('uenr-'))
-          .map((name) => {
-            console.log('[Service Worker] Removing old cache version:', name);
-            return caches.delete(name);
-          })
+          .map((name) => caches.delete(name))
       );
     }).then(() => self.clients.claim())
   );
 });
 
-// Fetch Event: Network-first with fast fallback for navigation, cache-first for static assets
+// Fetch Event: Strict same-origin handling only — NEVER intercept Google Auth, Firebase, or Vite dev endpoints
 self.addEventListener('fetch', (event) => {
   const { request } = event;
 
-  // Ignore non-GET requests and browser extensions
   if (request.method !== 'GET') return;
   if (!request.url.startsWith('http')) return;
 
-  // Exclude Firebase Firestore API endpoints (handled by Firebase SDK offline persistence)
+  let url;
+  try {
+    url = new URL(request.url);
+  } catch {
+    return;
+  }
+
+  // Never intercept cross-origin requests (Google Sign-In, apis.google.com, firebaseapp.com, firestore, etc.)
+  if (url.origin !== self.location.origin) {
+    return;
+  }
+
+  // Never intercept Firebase reserved auth routes, API routes, or Vite dev module URLs
   if (
-    request.url.includes('firestore.googleapis.com') ||
-    request.url.includes('identitytoolkit.googleapis.com') ||
-    request.url.includes('firebaseio.com')
+    url.pathname.startsWith('/__/') ||
+    url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/node_modules/') ||
+    url.pathname.startsWith('/src/') ||
+    url.pathname.startsWith('/@vite/') ||
+    url.pathname.startsWith('/@fs/') ||
+    url.pathname.startsWith('/@react-refresh')
   ) {
     return;
   }
@@ -58,53 +69,41 @@ self.addEventListener('fetch', (event) => {
   // 1. Navigation requests (HTML pages)
   if (request.mode === 'navigate') {
     event.respondWith(
-      // Race network with a 2500ms timeout to protect users on high-latency/choked connections
-      Promise.race([
-        fetch(request)
-          .then((networkResponse) => {
-            if (networkResponse && networkResponse.status === 200) {
-              const responseToCache = networkResponse.clone();
-              caches.open(CACHE_NAME).then((cache) => {
-                cache.put(request, responseToCache);
-              });
-            }
-            return networkResponse;
-          }),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Network timeout')), 2500)
-        )
-      ]).catch(async () => {
-        // Fallback to cached index page when offline or timed out
-        console.log('[Service Worker] Network failed or timed out. Serving cached page.');
-        const cachedResponse = await caches.match(request);
-        if (cachedResponse) return cachedResponse;
-        return (await caches.match('/')) || (await caches.match('/index.html'));
-      })
+      fetch(request)
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            const responseToCache = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put(request, responseToCache).catch(() => {});
+            });
+          }
+          return networkResponse;
+        })
+        .catch(async () => {
+          const cachedResponse = await caches.match(request);
+          if (cachedResponse) return cachedResponse;
+          const rootCache = (await caches.match('/')) || (await caches.match('/index.html'));
+          return rootCache || Response.error();
+        })
     );
     return;
   }
 
-  // 2. Static Assets (Scripts, Styles, Fonts, Images)
-  // Stale-While-Revalidate: Return cached version immediately, fetch updated copy in background
+  // 2. Same-Origin Static Assets (Images, Manifest, Built Bundles)
   event.respondWith(
     caches.match(request).then((cachedResponse) => {
       const fetchPromise = fetch(request)
         .then((networkResponse) => {
-          if (
-            networkResponse &&
-            networkResponse.status === 200 &&
-            (networkResponse.type === 'basic' || networkResponse.type === 'cors')
-          ) {
+          if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
             const responseToCache = networkResponse.clone();
             caches.open(CACHE_NAME).then((cache) => {
-              cache.put(request, responseToCache);
+              cache.put(request, responseToCache).catch(() => {});
             });
           }
           return networkResponse;
         })
         .catch(() => {
-          // If offline and not in cache, fallback to nothing or placeholder
-          return cachedResponse;
+          return cachedResponse || Response.error();
         });
 
       return cachedResponse || fetchPromise;

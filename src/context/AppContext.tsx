@@ -9,15 +9,14 @@ import {
   CurrentUser,
   AuthorizedUser,
   UserRole,
-  AutoLoggingSettings
+  AutoLoggingSettings,
+  GpsGeofenceSettings
 } from '../types';
+import { DEFAULT_UENR_GEOFENCE } from '../utils/geofence';
 import {
-  INITIAL_STUDENTS,
   INITIAL_COURSES,
   INITIAL_TIMETABLE,
-  INITIAL_ATTENDANCE,
   INITIAL_AUTHORIZED_USERS,
-  INITIAL_AUDIT_LOGS,
   INITIAL_SEMESTER,
   OFFICIAL_L200_COURSES,
   OFFICIAL_L200_TIMETABLE
@@ -27,7 +26,6 @@ import {
   auth,
   signInWithGoogle,
   logOut,
-  silentSignInAnonymously,
   onAuthStateChanged,
   testFirestoreConnection,
   handleFirestoreError,
@@ -37,6 +35,7 @@ import {
 import {
   collection,
   doc,
+  getDoc,
   setDoc,
   deleteDoc,
   updateDoc,
@@ -44,19 +43,31 @@ import {
   writeBatch,
   getDocs,
   query,
-  limit
+  limit,
+  where
 } from 'firebase/firestore';
 import {
   saveTimetableToOfflineStorage,
   loadTimetableFromOfflineStorage,
   getOfflineCacheStatus,
-  getNetworkStatus
+  getNetworkStatus,
+  OFFLINE_CACHE_KEYS
 } from '../utils/offlineCache';
 import { generateInstitutionalEmail } from '../utils/studentParser';
+import { streamsMatch } from '../utils/timetableHelper';
 
 export type NavigationTab = 'home' | 'attendance' | 'timetable' | 'admin' | 'reports';
 export type AdminSubTab = 'roster' | 'authorized' | 'database' | 'audit' | 'autologging';
 export type ThemeMode = 'light' | 'dark' | 'system';
+
+export interface AttendanceLaunchTarget {
+  courseId?: string;
+  stream?: string;
+  level?: string;
+  date?: string;
+  slotId?: string;
+  viewMode?: 'manual' | 'biometric' | 'gps';
+}
 
 interface AppContextType {
   students: Student[];
@@ -67,6 +78,9 @@ interface AppContextType {
   semester: SemesterConfig;
   activeTab: NavigationTab;
   setActiveTab: (tab: NavigationTab) => void;
+  attendanceLaunchTarget: AttendanceLaunchTarget | null;
+  launchAttendanceSession: (target?: AttendanceLaunchTarget) => void;
+  clearAttendanceLaunchTarget: () => void;
   adminSubTab: AdminSubTab;
   setAdminSubTab: (tab: AdminSubTab) => void;
   openDatabaseTab: () => void;
@@ -97,13 +111,11 @@ interface AppContextType {
   isAuthLoading: boolean;
   isCloudConnected: boolean;
   isAuthorized: boolean;
+  verifiedRole: UserRole | null;
   authorizedUsers: AuthorizedUser[];
   loginWithGoogle: (forcePrompt?: boolean) => Promise<void>;
   logoutUser: () => Promise<void>;
   switchAccount: () => Promise<void>;
-  isAutoSignIn: boolean;
-  toggleAutoSignIn: (enable?: boolean) => void;
-  autoSignInAsMaster: () => void;
   addAuthorizedUser: (user: Omit<AuthorizedUser, 'id' | 'addedAt'>) => Promise<void>;
   removeAuthorizedUser: (id: string) => Promise<void>;
 
@@ -159,14 +171,16 @@ interface AppContextType {
     records: Record<string, 'present' | 'absent'>,
     biometricVerifiedIds?: string[],
     finalize?: boolean,
-    stream?: string
+    stream?: string,
+    gpsVerifiedIds?: string[]
   ) => Promise<void>;
   unlockAttendance: (date: string, courseId: string, stream?: string) => Promise<void>;
   checkInStudentWithIndex: (
     indexNumber: string,
     date: string,
     courseId: string,
-    stream?: string
+    stream?: string,
+    gpsMeta?: { gpsVerified?: boolean; distanceMeters?: number }
   ) => Promise<{
     success: boolean;
     message: string;
@@ -175,6 +189,10 @@ interface AppContextType {
     stats?: { attended: number; total: number; percentage: number; isEligible: boolean };
     alreadyCheckedIn?: boolean;
   }>;
+
+  // GPS Geofence Config
+  geofenceSettings: GpsGeofenceSettings;
+  updateGeofenceSettings: (updates: Partial<GpsGeofenceSettings>) => Promise<void>;
 
   // Audit & Auto-Logging actions
   addAuditLog: (action: string, details: string, type: AuditLog['type']) => Promise<void>;
@@ -202,8 +220,33 @@ const DUMMY_SLOT_IDS = ['tt-1', 'tt-2', 'tt-3', 'tt-4', 'tt-5'];
 
 const MASTER_HOD_EMAIL = 'jonesdarko345@gmail.com';
 
+const GUEST_USER: CurrentUser = {
+  name: 'Guest',
+  email: '',
+  role: 'class_rep',
+  department: 'Department of Information Technology'
+};
+
+const clearSensitiveStorage = () => {
+  try {
+    Object.values(STORAGE_KEYS).forEach((k) => localStorage.removeItem(k));
+    localStorage.removeItem(OFFLINE_CACHE_KEYS.TIMETABLE_SNAPSHOT);
+    localStorage.removeItem(OFFLINE_CACHE_KEYS.LAST_CACHED_AT);
+    localStorage.removeItem('uenr_auto_signin');
+    localStorage.removeItem('uenr_current_user_profile');
+    localStorage.removeItem('uenr_geofence_settings');
+  } catch {
+    // ignore
+  }
+};
+
+export const matchAttendanceStream = (recordStream?: string, requestedStream?: string): boolean => {
+  return streamsMatch(recordStream, requestedStream);
+};
+
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [activeTab, setActiveTab] = useState<NavigationTab>('home');
+  const [attendanceLaunchTarget, setAttendanceLaunchTarget] = useState<AttendanceLaunchTarget | null>(null);
   const [adminSubTab, setAdminSubTab] = useState<AdminSubTab>('roster');
   const [isRoleMenuOpen, setIsRoleMenuOpen] = useState<boolean>(false);
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
@@ -212,80 +255,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [cloudSyncError, setCloudSyncError] = useState<string | null>(null);
 
+  const launchAttendanceSession = useCallback((target?: AttendanceLaunchTarget) => {
+    setAttendanceLaunchTarget(target || null);
+    setActiveTab('attendance');
+  }, []);
+
+  const clearAttendanceLaunchTarget = useCallback(() => {
+    setAttendanceLaunchTarget(null);
+  }, []);
+
   const openDatabaseTab = useCallback(() => {
     setActiveTab('admin');
     setAdminSubTab('database');
   }, []);
 
-  const [authorizedUsers, setAuthorizedUsers] = useState<AuthorizedUser[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.AUTHORIZED);
-      if (saved) {
-        const parsed: AuthorizedUser[] = JSON.parse(saved);
-        // Ensure legacy mock entries (auth-2, auth-3/Kofi Mensah) are completely purged
-        const cleaned = parsed
-          .map((u) => {
-            if (u.name === 'Dr. Jones Darko' || u.email.toLowerCase() === MASTER_HOD_EMAIL.toLowerCase()) {
-              return { ...u, name: 'Jones Darko' };
-            }
-            return u;
-          })
-          .filter(
-            (u) =>
-              u.id !== 'auth-2' &&
-              u.id !== 'auth-3' &&
-              u.email.toLowerCase() !== 'dr.asante@uenr.edu.gh' &&
-              u.email.toLowerCase() !== 'classrep.it300@uenr.edu.gh' &&
-              !u.name.toLowerCase().includes('kofi mensah')
-          );
-        return cleaned.length > 0 ? cleaned : INITIAL_AUTHORIZED_USERS;
-      }
-      return INITIAL_AUTHORIZED_USERS;
-    } catch {
-      return INITIAL_AUTHORIZED_USERS;
-    }
-  });
+  const [authorizedUsers, setAuthorizedUsers] = useState<AuthorizedUser[]>([]);
+  const [verifiedRole, setVerifiedRole] = useState<UserRole | null>(null);
+  const [isAuthorized, setIsAuthorized] = useState<boolean>(false);
+  const [currentUser, setCurrentUserState] = useState<CurrentUser>(GUEST_USER);
 
-  // Auto Sign-in Engine (Remembers user identity without prompting for Gmail)
-  const [isAutoSignIn, setIsAutoSignIn] = useState<boolean>(() => {
-    try {
-      const saved = localStorage.getItem('uenr_auto_signin');
-      // Default to true so user is automatically logged in without repeated Gmail account prompts
-      return saved !== null ? saved === 'true' : true;
-    } catch {
-      return true;
-    }
-  });
-
-  const [currentUser, setCurrentUser] = useState<CurrentUser>(() => {
-    try {
-      const saved = localStorage.getItem('uenr_current_user_profile');
-      if (saved) {
-        const parsed: CurrentUser = JSON.parse(saved);
-        if (parsed.name === 'Dr. Jones Darko' || parsed.email?.toLowerCase() === MASTER_HOD_EMAIL.toLowerCase()) {
-          parsed.name = 'Jones Darko';
-        }
-        return parsed;
-      }
-    } catch {
-      // ignore
-    }
-    return {
-      name: 'Jones Darko',
-      email: MASTER_HOD_EMAIL,
-      role: 'hod',
-      department: 'Department of Information Technology'
-    };
-  });
-
-  // Automatically save current user profile to local storage whenever updated
-  useEffect(() => {
-    try {
-      localStorage.setItem('uenr_current_user_profile', JSON.stringify(currentUser));
-    } catch (e) {
-      console.warn('Could not persist current user profile:', e);
-    }
-  }, [currentUser]);
+  // Enforce role ceiling: no user can elevate above their verifiedRole
+  const setCurrentUser: React.Dispatch<React.SetStateAction<CurrentUser>> = useCallback(
+    (updater) => {
+      setCurrentUserState((prev) => {
+        const next = typeof updater === 'function' ? updater(prev) : updater;
+        if (!verifiedRole) return GUEST_USER;
+        const allowedRoles: UserRole[] =
+          verifiedRole === 'hod'
+            ? ['hod', 'lecturer', 'class_rep']
+            : verifiedRole === 'lecturer'
+            ? ['lecturer', 'class_rep']
+            : ['class_rep'];
+        const safeRole = allowedRoles.includes(next.role) ? next.role : verifiedRole;
+        return { ...next, role: safeRole };
+      });
+    },
+    [verifiedRole]
+  );
 
   // Auto Logging & Automation Settings
   const [autoLoggingSettings, setAutoLoggingSettings] = useState<AutoLoggingSettings>(() => {
@@ -330,11 +336,58 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return next;
     });
 
-    if (firebaseUser || auth.currentUser) {
+    if (isAuthorized && (verifiedRole === 'hod' || verifiedRole === 'lecturer')) {
       try {
         await setDoc(doc(db, 'systemSettings', 'autoLogging'), { ...autoLoggingSettings, ...updates }, { merge: true });
       } catch (err) {
         console.warn('[Firestore] systemSettings autoLogging sync notice:', err);
+      }
+    }
+  };
+
+  // Persistent Campus / Hall GPS Geofence Settings
+  const defaultGeofenceSettings: GpsGeofenceSettings = {
+    enabled: DEFAULT_UENR_GEOFENCE.enabled,
+    campusName: DEFAULT_UENR_GEOFENCE.campusName,
+    latitude: DEFAULT_UENR_GEOFENCE.latitude,
+    longitude: DEFAULT_UENR_GEOFENCE.longitude,
+    radiusMeters: DEFAULT_UENR_GEOFENCE.radiusMeters,
+    rollingPinEnabled: true
+  };
+
+  const [geofenceSettings, setGeofenceSettings] = useState<GpsGeofenceSettings>(() => {
+    try {
+      const saved = localStorage.getItem('uenr_geofence_settings');
+      if (saved) return { ...defaultGeofenceSettings, ...JSON.parse(saved) };
+    } catch {
+      // ignore
+    }
+    return defaultGeofenceSettings;
+  });
+
+  const updateGeofenceSettings = async (updates: Partial<GpsGeofenceSettings>) => {
+    const nextSettings: GpsGeofenceSettings = {
+      ...geofenceSettings,
+      ...updates,
+      enabled: (updates.radiusMeters ?? geofenceSettings.radiusMeters) > 0,
+      updatedAt: new Date().toISOString(),
+      updatedBy: currentUser?.name || currentUser?.email || 'Academic Staff'
+    };
+
+    setGeofenceSettings(nextSettings);
+    try {
+      if (isAuthorized) {
+        localStorage.setItem('uenr_geofence_settings', JSON.stringify(nextSettings));
+      }
+    } catch (e) {
+      console.warn('Could not persist geofence settings locally:', e);
+    }
+
+    if (isAuthorized && (verifiedRole === 'hod' || verifiedRole === 'lecturer')) {
+      try {
+        await setDoc(doc(db, 'systemSettings', 'geofence'), nextSettings, { merge: true });
+      } catch (err) {
+        console.warn('[Firestore] systemSettings geofence sync notice:', err);
       }
     }
   };
@@ -344,90 +397,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return [...items].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   };
 
-  // Students roster starts clean/empty
-  const [students, setStudents] = useState<Student[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.STUDENTS);
-      if (saved) {
-        const parsed: Student[] = JSON.parse(saved);
-        // Ensure legacy mock students (std-1 through std-12) are completely purged
-        const cleaned = parsed
-          .filter(
-            (s) => !['std-1', 'std-2', 'std-3', 'std-4', 'std-5', 'std-6', 'std-7', 'std-8', 'std-9', 'std-10', 'std-11', 'std-12'].includes(s.id)
-          )
-          .map((s) => {
-            const idxSlug = (s.indexNumber || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-            const emailPrefix = (s.email || '').toLowerCase().split('@')[0];
-            if (!s.email || emailPrefix === idxSlug) {
-              return { ...s, email: generateInstitutionalEmail(s.name, s.indexNumber) };
-            }
-            return s;
-          });
-        return sortAlphabetically(cleaned);
-      }
-      return sortAlphabetically(INITIAL_STUDENTS);
-    } catch {
-      return sortAlphabetically(INITIAL_STUDENTS);
-    }
-  });
+  // Robust Deduplication Helper (prevents React duplicate key errors)
+  const deduplicateStudents = (items: Student[]): Student[] => {
+    const seenIds = new Set<string>();
+    const seenIndexes = new Set<string>();
+    const result: Student[] = [];
 
-  const [courses, setCourses] = useState<Course[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.COURSES) || localStorage.getItem('uenr_courses_v2');
-      if (saved) {
-        const parsed: Course[] = JSON.parse(saved);
-        const filtered = parsed.filter((c) => !DUMMY_COURSE_IDS.includes(c.id));
-        return filtered.length > 0 ? filtered : INITIAL_COURSES;
-      }
-      return INITIAL_COURSES;
-    } catch {
-      return INITIAL_COURSES;
-    }
-  });
+    for (const s of items) {
+      if (!s || !s.id) continue;
+      const cleanId = s.id.trim();
+      const cleanIdx = (s.indexNumber || '').trim().toUpperCase();
 
-  const [timetable, setTimetable] = useState<TimetableSlot[]>(() => {
-    try {
-      // 1. Check dedicated offline snapshot first for instant offline readiness
-      const offlineSnapshot = loadTimetableFromOfflineStorage();
-      if (offlineSnapshot && Array.isArray(offlineSnapshot.timetable) && offlineSnapshot.timetable.length > 0) {
-        const filtered = offlineSnapshot.timetable.filter(
-          (t) => !DUMMY_SLOT_IDS.includes(t.id) && !DUMMY_COURSE_IDS.includes(t.courseId)
-        );
-        if (filtered.length > 0) return filtered;
-      }
+      if (cleanId && seenIds.has(cleanId)) continue;
+      if (cleanIdx && seenIndexes.has(cleanIdx)) continue;
 
-      // 2. Check standard local storage
-      const saved = localStorage.getItem(STORAGE_KEYS.TIMETABLE) || localStorage.getItem('uenr_timetable_v2');
-      if (saved) {
-        const parsed: TimetableSlot[] = JSON.parse(saved);
-        const filtered = parsed.filter(
-          (t) => !DUMMY_SLOT_IDS.includes(t.id) && !DUMMY_COURSE_IDS.includes(t.courseId)
-        );
-        return filtered.length > 0 ? filtered : INITIAL_TIMETABLE;
-      }
-      return INITIAL_TIMETABLE;
-    } catch {
-      return INITIAL_TIMETABLE;
+      if (cleanId) seenIds.add(cleanId);
+      if (cleanIdx) seenIndexes.add(cleanIdx);
+      result.push(s);
     }
-  });
 
-  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.ATTENDANCE);
-      return saved ? JSON.parse(saved) : INITIAL_ATTENDANCE;
-    } catch {
-      return INITIAL_ATTENDANCE;
-    }
-  });
+    return sortAlphabetically(result);
+  };
 
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.AUDIT_LOGS);
-      return saved ? JSON.parse(saved) : INITIAL_AUDIT_LOGS;
-    } catch {
-      return INITIAL_AUDIT_LOGS;
-    }
-  });
+  // All academic & personnel collections start strictly empty until verified authorization completes
+  const [students, setStudents] = useState<Student[]>([]);
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [timetable, setTimetable] = useState<TimetableSlot[]>([]);
+  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
 
   const [semester] = useState<SemesterConfig>(() => {
     try {
@@ -563,46 +560,52 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return success;
   }, [timetable, courses, semester]);
 
-  // Check authorization status:
-  // User is authorized if Auto Sign-In is enabled OR if signed in with an authorized email
-  const isAuthorized = Boolean(
-    isAutoSignIn ||
-    (firebaseUser &&
-      (firebaseUser.email?.toLowerCase() === MASTER_HOD_EMAIL.toLowerCase() ||
-        authorizedUsers.some(
-          (u) => u.email.toLowerCase() === firebaseUser.email?.toLowerCase()
-        )))
-  );
-
-  // Local storage caching for offline resilience
+  // Persist local offline cache ONLY when user is verified & authorized
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(students));
-  }, [students]);
+    if (!isAuthorized) return;
+    try {
+      localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(students));
+    } catch {}
+  }, [students, isAuthorized]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.COURSES, JSON.stringify(courses));
-  }, [courses]);
+    if (!isAuthorized) return;
+    try {
+      localStorage.setItem(STORAGE_KEYS.COURSES, JSON.stringify(courses));
+    } catch {}
+  }, [courses, isAuthorized]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.TIMETABLE, JSON.stringify(timetable));
-    // Automatically keep dedicated offline timetable cache fresh
-    saveTimetableToOfflineStorage(timetable, courses, semester);
-    setOfflineCacheInfo(getOfflineCacheStatus());
-  }, [timetable, courses, semester]);
+    if (!isAuthorized) return;
+    try {
+      localStorage.setItem(STORAGE_KEYS.TIMETABLE, JSON.stringify(timetable));
+      saveTimetableToOfflineStorage(timetable, courses, semester);
+      setOfflineCacheInfo(getOfflineCacheStatus());
+    } catch {}
+  }, [timetable, courses, semester, isAuthorized]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify(attendanceRecords));
-  }, [attendanceRecords]);
+    if (!isAuthorized) return;
+    try {
+      localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify(attendanceRecords));
+    } catch {}
+  }, [attendanceRecords, isAuthorized]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify(auditLogs));
-  }, [auditLogs]);
+    if (!isAuthorized) return;
+    try {
+      localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify(auditLogs));
+    } catch {}
+  }, [auditLogs, isAuthorized]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.AUTHORIZED, JSON.stringify(authorizedUsers));
-  }, [authorizedUsers]);
+    if (!isAuthorized) return;
+    try {
+      localStorage.setItem(STORAGE_KEYS.AUTHORIZED, JSON.stringify(authorizedUsers));
+    } catch {}
+  }, [authorizedUsers, isAuthorized]);
 
-  // Test Firestore Connection on App Boot
+  // Test Firestore Connection on App Boot (single health-check doc only)
   useEffect(() => {
     let isMounted = true;
     const timer = setTimeout(() => {
@@ -618,22 +621,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const isSeedingRef = useRef(false);
   const isClearingRosterRef = useRef(false);
+  const hasStudentsSnapshotRef = useRef(false);
+  const hasCoursesSnapshotRef = useRef(false);
+  const hasAttendanceSnapshotRef = useRef(false);
+  const processedQrTicketsRef = useRef<Set<string>>(new Set());
+  const pendingQrTicketsRef = useRef<Array<Record<string, any>>>([]);
 
-  // Initialize Firebase Auth (support anonymous session if not signed in with Google)
-  useEffect(() => {
-    if (!auth.currentUser) {
-      silentSignInAnonymously().catch(() => {});
-    }
+  const wipeUnauthorizedState = useCallback(() => {
+    hasStudentsSnapshotRef.current = false;
+    hasCoursesSnapshotRef.current = false;
+    hasAttendanceSnapshotRef.current = false;
+    processedQrTicketsRef.current.clear();
+    pendingQrTicketsRef.current = [];
+    setStudents([]);
+    setCourses([]);
+    setTimetable([]);
+    setAttendanceRecords([]);
+    setAuditLogs([]);
+    setAuthorizedUsers([]);
+    clearSensitiveStorage();
   }, []);
 
-  // Clean up any old mock students from Firestore if present & seed initial structure
-  const initializeFirestore = useCallback(async () => {
-    if (isSeedingRef.current || !auth.currentUser) return;
+  // Clean up any old mock records from Firestore & sync authorizedEmails index (authorized staff only)
+  const initializeFirestore = useCallback(async (role: UserRole) => {
+    if (isSeedingRef.current || !auth.currentUser || auth.currentUser.isAnonymous) return;
     isSeedingRef.current = true;
     setIsSyncing(true);
 
     try {
-      // 1. Purge legacy mock students from Firestore if they exist
       const mockIds = ['std-1', 'std-2', 'std-3', 'std-4', 'std-5', 'std-6', 'std-7', 'std-8', 'std-9', 'std-10', 'std-11', 'std-12'];
       const batch = writeBatch(db);
       let needsCommit = false;
@@ -643,7 +658,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         needsCommit = true;
       }
 
-      // 2. Purge legacy dummy courses and slots (crs-1..crs-5 and tt-1..tt-5)
+      // Purge duplicate student documents in Firestore if any exist
+      try {
+        const studentSnap = await getDocs(collection(db, 'students'));
+        const seenIndices = new Map<string, string>();
+        studentSnap.forEach((d) => {
+          const data = d.data();
+          const cleanIdx = (data.indexNumber || '').toUpperCase().trim();
+          if (cleanIdx) {
+            if (seenIndices.has(cleanIdx)) {
+              batch.delete(doc(db, 'students', d.id));
+              needsCommit = true;
+            } else {
+              seenIndices.set(cleanIdx, d.id);
+            }
+          }
+        });
+      } catch (e) {
+        console.warn('Student deduplication check note:', e);
+      }
+
       for (const cid of DUMMY_COURSE_IDS) {
         batch.delete(doc(db, 'courses', cid));
         needsCommit = true;
@@ -654,23 +688,55 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         needsCommit = true;
       }
 
-      // Purge legacy mock users auth-2 and auth-3 (Kofi Mensah) from Firestore if present
       batch.delete(doc(db, 'authorizedUsers', 'auth-2'));
       batch.delete(doc(db, 'authorizedUsers', 'auth-3'));
       needsCommit = true;
 
-      // 3. Check and seed authorized users registry if empty
-      const authSnap = await getDocs(query(collection(db, 'authorizedUsers'), limit(1)));
-      if (authSnap.empty) {
-        INITIAL_AUTHORIZED_USERS.forEach((authUser) => {
-          batch.set(doc(db, 'authorizedUsers', authUser.id), authUser);
-          needsCommit = true;
-        });
+      if (role === 'hod') {
+        const authSnap = await getDocs(collection(db, 'authorizedUsers'));
+        if (authSnap.empty) {
+          INITIAL_AUTHORIZED_USERS.forEach((authUser) => {
+            const cleanEmail = authUser.email.toLowerCase().trim();
+            batch.set(doc(db, 'authorizedUsers', authUser.id), authUser);
+            batch.set(doc(db, 'authorizedEmails', cleanEmail), {
+              email: cleanEmail,
+              name: authUser.name,
+              role: authUser.role,
+              department: authUser.department || 'Department of Information Technology',
+              addedAt: authUser.addedAt
+            });
+            needsCommit = true;
+          });
+        } else {
+          // Ensure every authorized user also has an email-indexed lookup doc for rule verification
+          authSnap.forEach((d) => {
+            const u = d.data() as AuthorizedUser;
+            const cleanEmail = (u.email || '').toLowerCase().trim();
+            if (
+              cleanEmail &&
+              cleanEmail !== 'dr.asante@uenr.edu.gh' &&
+              cleanEmail !== 'classrep.it300@uenr.edu.gh' &&
+              ['hod', 'lecturer', 'class_rep'].includes(u.role)
+            ) {
+              batch.set(
+                doc(db, 'authorizedEmails', cleanEmail),
+                {
+                  email: cleanEmail,
+                  name: u.name || 'Academic Personnel',
+                  role: u.role,
+                  department: u.department || 'Department of Information Technology',
+                  addedAt: u.addedAt || new Date().toISOString().split('T')[0]
+                },
+                { merge: true }
+              );
+              needsCommit = true;
+            }
+          });
+        }
       }
 
       if (needsCommit) {
         await batch.commit();
-        console.log('[Firestore] UENR Portal initialized (mock records purged, ready for user courses).');
       }
     } catch (error) {
       console.warn('[Firestore] Initialization check note:', error);
@@ -680,77 +746,190 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, []);
 
-  // Listen to Firebase Auth state
+  // Listen to Firebase Auth state & strictly verify authorization before exposing any data
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setFirebaseUser(user);
-      setIsAuthLoading(false);
 
-      if (user) {
-        setIsCloudConnected(true);
-        if (!user.isAnonymous) {
-          const userEmail = (user.email || '').toLowerCase();
-          const isMasterHod = userEmail === MASTER_HOD_EMAIL.toLowerCase();
+      // Unauthenticated or anonymous QR-check-in sessions NEVER get staff portal access
+      if (!user || user.isAnonymous) {
+        setVerifiedRole(null);
+        setIsAuthorized(false);
+        setCurrentUserState(GUEST_USER);
+        wipeUnauthorizedState();
+        setIsAuthLoading(false);
+        return;
+      }
 
-          // Check if user is in authorized list
-          const matchedAuthorized = authorizedUsers.find(
-            (u) => u.email.toLowerCase() === userEmail
-          );
+      setIsAuthLoading(true);
+      setIsCloudConnected(true);
 
-          let determinedRole: UserRole = 'lecturer';
-          if (isMasterHod) {
-            determinedRole = 'hod';
-          } else if (matchedAuthorized) {
-            determinedRole = matchedAuthorized.role;
+      const userEmail = (user.email || '').toLowerCase().trim();
+      const isMasterHod = userEmail === MASTER_HOD_EMAIL.toLowerCase() && user.emailVerified !== false;
+
+      let resolvedRole: UserRole | null = null;
+      let resolvedName = user.displayName || (userEmail ? userEmail.split('@')[0] : 'Academic Staff');
+      let resolvedDept = 'Department of Information Technology';
+
+      if (isMasterHod) {
+        resolvedRole = 'hod';
+        resolvedName = 'Jones Darko';
+      } else if (userEmail && user.emailVerified) {
+        try {
+          const emailSnap = await getDoc(doc(db, 'authorizedEmails', userEmail));
+          if (emailSnap.exists()) {
+            const data = emailSnap.data() as { role?: UserRole; name?: string; department?: string };
+            if (data.role && ['hod', 'lecturer', 'class_rep'].includes(data.role)) {
+              resolvedRole = data.role;
+              resolvedName = user.displayName || data.name || resolvedName;
+              resolvedDept = data.department || resolvedDept;
+            }
           }
-
-          let determinedName =
-            isMasterHod || userEmail === MASTER_HOD_EMAIL.toLowerCase()
-              ? 'Jones Darko'
-              : (user.displayName ||
-                matchedAuthorized?.name ||
-                (userEmail ? userEmail.split('@')[0] : 'Academic Staff'));
-
-          if (determinedName === 'Dr. Jones Darko') {
-            determinedName = 'Jones Darko';
-          }
-
-          setCurrentUser({
-            name: determinedName,
-            email: user.email || '',
-            role: determinedRole,
-            department: matchedAuthorized?.department || 'Department of Information Technology',
-            photoURL: user.photoURL || undefined,
-            uid: user.uid
-          });
+        } catch (err) {
+          console.warn('[Auth] Authorization lookup blocked or unavailable:', err);
         }
+      }
 
-        // Initialize / clean cloud database
-        await initializeFirestore();
-      } else {
-        // Fallback default
-        setCurrentUser({
-          name: 'Jones Darko',
-          email: MASTER_HOD_EMAIL,
-          role: 'hod',
-          department: 'Department of Information Technology'
+      if (resolvedRole) {
+        if (resolvedName === 'Dr. Jones Darko') {
+          resolvedName = 'Jones Darko';
+        }
+        setVerifiedRole(resolvedRole);
+        setIsAuthorized(true);
+        setCurrentUserState({
+          name: resolvedName,
+          email: user.email || userEmail,
+          role: resolvedRole,
+          department: resolvedDept,
+          photoURL: user.photoURL || undefined,
+          uid: user.uid
         });
+        setIsAuthLoading(false);
+        await initializeFirestore(resolvedRole);
+      } else {
+        // Signed-in Google user is NOT on the HOD's authorized registry
+        setVerifiedRole(null);
+        setIsAuthorized(false);
+        setCurrentUserState({
+          name: user.displayName || 'Unauthorized Account',
+          email: user.email || '',
+          role: 'class_rep',
+          department: ''
+        });
+        wipeUnauthorizedState();
+        setIsAuthLoading(false);
       }
     });
 
     return () => unsubscribe();
-  }, [authorizedUsers, initializeFirestore]);
+  }, [initializeFirestore, wipeUnauthorizedState]);
 
-  // 1. Real-time Firestore Listeners for Public Collections (Students, Courses, Timetable)
-  // These run immediately upon app boot and don't require user login
+  // Ref to latest checkInStudentWithIndex for processing student QR check-in tickets
+  const checkInStudentWithIndexRef = useRef<
+    (
+      indexNumber: string,
+      date: string,
+      courseId: string,
+      stream?: string,
+      gpsMeta?: { gpsVerified?: boolean; distanceMeters?: number }
+    ) => Promise<{
+      success: boolean;
+      message: string;
+      student?: Student;
+      course?: Course;
+      stats?: { attended: number; total: number; percentage: number; isEligible: boolean };
+      alreadyCheckedIn?: boolean;
+    }>
+  >(async () => ({ success: false, message: 'Initializing...' }));
+
+  const processPendingQrTickets = useCallback(async () => {
+    if (!isAuthorized) return;
+    if (!hasStudentsSnapshotRef.current || !hasCoursesSnapshotRef.current || !hasAttendanceSnapshotRef.current) {
+      return;
+    }
+    const queue = [...pendingQrTicketsRef.current];
+    if (queue.length === 0) return;
+
+    for (const ticket of queue) {
+      const ticketId = ticket.id as string;
+      if (!ticketId || processedQrTicketsRef.current.has(ticketId)) continue;
+      processedQrTicketsRef.current.add(ticketId);
+
+      try {
+        const res = await checkInStudentWithIndexRef.current(
+          String(ticket.indexNumber || ''),
+          String(ticket.date || ''),
+          String(ticket.courseId || ''),
+          ticket.stream ? String(ticket.stream) : undefined,
+          {
+            gpsVerified: Boolean(ticket.gpsVerified),
+            distanceMeters: typeof ticket.distanceMeters === 'number' ? ticket.distanceMeters : undefined
+          }
+        );
+
+        await updateDoc(doc(db, 'qrCheckIns', ticketId), {
+          status: res.success ? 'confirmed' : 'rejected',
+          message: res.message,
+          studentName: res.student?.name || null,
+          studentIndex: res.student?.indexNumber || null,
+          alreadyCheckedIn: Boolean(res.alreadyCheckedIn),
+          stats: res.stats || null
+        });
+      } catch (err) {
+        console.warn('[Firestore] Failed processing QR check-in ticket:', ticketId, err);
+        processedQrTicketsRef.current.delete(ticketId);
+      }
+    }
+  }, [isAuthorized]);
+
+  // Re-run pending QR tickets once snapshots hydrate
   useEffect(() => {
+    if (isAuthorized && pendingQrTicketsRef.current.length > 0) {
+      processPendingQrTickets();
+    }
+  }, [isAuthorized, students, courses, attendanceRecords, processPendingQrTickets]);
+
+  // STRICTLY GATED Real-time Firestore Listeners: NEVER run unless isAuthorized === true
+  useEffect(() => {
+    if (!isAuthorized || !firebaseUser || firebaseUser.isAnonymous) {
+      return;
+    }
+
+    // Hydrate offline fallback cache only for verified authorized users
+    try {
+      const savedStudents = localStorage.getItem(STORAGE_KEYS.STUDENTS);
+      if (savedStudents) {
+        const parsed: Student[] = JSON.parse(savedStudents);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setStudents(deduplicateStudents(parsed));
+        }
+      }
+      const offlineSnapshot = loadTimetableFromOfflineStorage();
+      if (offlineSnapshot && offlineSnapshot.courses?.length > 0) {
+        setCourses(offlineSnapshot.courses);
+        setTimetable(offlineSnapshot.timetable);
+      } else {
+        const savedCourses = localStorage.getItem(STORAGE_KEYS.COURSES);
+        if (savedCourses) setCourses(JSON.parse(savedCourses));
+        const savedTimetable = localStorage.getItem(STORAGE_KEYS.TIMETABLE);
+        if (savedTimetable) setTimetable(JSON.parse(savedTimetable));
+      }
+      const savedAtt = localStorage.getItem(STORAGE_KEYS.ATTENDANCE);
+      if (savedAtt) setAttendanceRecords(JSON.parse(savedAtt));
+      const savedLogs = localStorage.getItem(STORAGE_KEYS.AUDIT_LOGS);
+      if (savedLogs) setAuditLogs(JSON.parse(savedLogs));
+      const savedAuth = localStorage.getItem(STORAGE_KEYS.AUTHORIZED);
+      if (savedAuth) setAuthorizedUsers(JSON.parse(savedAuth));
+    } catch {}
+
     setIsSyncing(true);
     setCloudSyncError(null);
 
-    // Students Listener (filters out legacy mock IDs and safeguards against wiping local rosters)
+    // 1. Students Listener
     const unsubStudents = onSnapshot(
       collection(db, 'students'),
       (snapshot) => {
+        hasStudentsSnapshotRef.current = true;
         const list: Student[] = [];
         snapshot.forEach((d) => {
           const s = d.data() as Student;
@@ -765,10 +944,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
 
         if (list.length > 0) {
-          // Cloud database has confirmed records
           setStudents((currentLocal) => {
             if (isClearingRosterRef.current) return [];
-            // Merge cloud list with any locally added students that are still in flight
             const cloudIndexMap = new Map<string, Student>();
             list.forEach((s) => cloudIndexMap.set(s.indexNumber.toUpperCase().trim(), s));
 
@@ -779,26 +956,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 combined.push(loc);
               }
             });
-            const sorted = sortAlphabetically(combined);
-            try {
-              localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(sorted));
-            } catch (e) {}
-            return sorted;
+            return deduplicateStudents(combined);
           });
         } else {
-          // Cloud snapshot has 0 records:
-          // CRITICAL: Protect against wiping out valid locally imported students!
           setStudents((currentLocal) => {
             if (currentLocal.length > 0 && !isClearingRosterRef.current) {
-              console.log(`[Firestore] Cloud roster empty; syncing ${currentLocal.length} local students to Cloud Firestore...`);
               const batch = writeBatch(db);
               currentLocal.slice(0, 450).forEach((st) => {
                 batch.set(doc(db, 'students', st.id), st);
               });
-              batch.commit().catch((err) => {
-                console.warn('[Firestore] Syncing local students to cloud notice:', err);
-              });
-              return sortAlphabetically(currentLocal);
+              batch.commit().catch(() => {});
+              return deduplicateStudents(currentLocal);
             }
             return [];
           });
@@ -811,10 +979,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     );
 
-    // Courses Listener
+    // 2. Courses Listener
     const unsubCourses = onSnapshot(
       collection(db, 'courses'),
       (snapshot) => {
+        hasCoursesSnapshotRef.current = true;
         const list: Course[] = [];
         snapshot.forEach((d) => {
           const c = d.data() as Course;
@@ -841,17 +1010,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     );
 
-    // Timetable Listener
+    // 3. Timetable Listener
     const unsubTimetable = onSnapshot(
       collection(db, 'timetable'),
       (snapshot) => {
         const list: TimetableSlot[] = [];
         snapshot.forEach((d) => {
           const t = d.data() as TimetableSlot;
-          if (
-            !DUMMY_SLOT_IDS.includes(t.id) &&
-            !DUMMY_COURSE_IDS.includes(t.courseId)
-          ) {
+          if (!DUMMY_SLOT_IDS.includes(t.id) && !DUMMY_COURSE_IDS.includes(t.courseId)) {
             list.push(t);
           }
         });
@@ -874,60 +1040,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     );
 
-    return () => {
-      unsubStudents();
-      unsubCourses();
-      unsubTimetable();
-    };
-  }, []);
-
-  // 2. Real-time Firestore Listeners for Authenticated Collections
-  useEffect(() => {
-    if (!firebaseUser) return;
-
-    // 1. Authorized Users Listener
-    const unsubAuthUsers = onSnapshot(
-      collection(db, 'authorizedUsers'),
-      (snapshot) => {
-        if (!snapshot.empty) {
-          const list: AuthorizedUser[] = [];
-          snapshot.forEach((d) => {
-            const u = d.data() as AuthorizedUser;
-            // Purge legacy mock users (auth-2, auth-3/Kofi Mensah) if encountered from older snapshot
-            if (
-              u.id === 'auth-3' ||
-              u.email?.toLowerCase() === 'classrep.it300@uenr.edu.gh' ||
-              u.name?.toLowerCase().includes('kofi mensah') ||
-              u.id === 'auth-2' ||
-              u.email?.toLowerCase() === 'dr.asante@uenr.edu.gh'
-            ) {
-              deleteDoc(doc(db, 'authorizedUsers', d.id)).catch(() => {});
-              return;
-            }
-            list.push(u);
-          });
-          setAuthorizedUsers(list.length > 0 ? list : INITIAL_AUTHORIZED_USERS);
-        }
-      },
-      (error) => {
-        handleFirestoreError(error, OperationType.GET, 'authorizedUsers');
-      }
-    );
-
-    // 2. Attendance Listener
+    // 4. Attendance Listener
     const unsubAttendance = onSnapshot(
       collection(db, 'attendance'),
       (snapshot) => {
+        hasAttendanceSnapshotRef.current = true;
         const list: AttendanceRecord[] = [];
         snapshot.forEach((d) => list.push(d.data() as AttendanceRecord));
         setAttendanceRecords(list);
       },
       (error) => {
-        handleFirestoreError(error, OperationType.GET, 'attendance');
+        console.warn('[Firestore] Attendance listener sync notice:', error);
       }
     );
 
-    // 3. Audit Logs Listener
+    // 5. Audit Logs Listener
     const unsubLogs = onSnapshot(
       collection(db, 'auditLogs'),
       (snapshot) => {
@@ -939,11 +1066,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       },
       (error) => {
-        handleFirestoreError(error, OperationType.GET, 'auditLogs');
+        console.warn('[Firestore] Audit logs sync notice:', error);
       }
     );
 
-    // 4. Auto Logging & Automation Settings Listener
+    // 6. Authorized Users Listener (with real-time revocation enforcement)
+    const unsubAuthUsers = onSnapshot(
+      collection(db, 'authorizedUsers'),
+      (snapshot) => {
+        const list: AuthorizedUser[] = [];
+        snapshot.forEach((d) => {
+          const u = d.data() as AuthorizedUser;
+          if (
+            u.id === 'auth-3' ||
+            u.email?.toLowerCase() === 'classrep.it300@uenr.edu.gh' ||
+            u.name?.toLowerCase().includes('kofi mensah') ||
+            u.id === 'auth-2' ||
+            u.email?.toLowerCase() === 'dr.asante@uenr.edu.gh'
+          ) {
+            deleteDoc(doc(db, 'authorizedUsers', d.id)).catch(() => {});
+            return;
+          }
+          list.push(u);
+        });
+        setAuthorizedUsers(list.length > 0 ? list : INITIAL_AUTHORIZED_USERS);
+
+        // If a non-master user was just revoked while logged in, lock them out immediately
+        const activeEmail = (firebaseUser.email || '').toLowerCase().trim();
+        if (list.length > 0 && activeEmail && activeEmail !== MASTER_HOD_EMAIL.toLowerCase()) {
+          const stillListed = list.some((u) => u.email.toLowerCase().trim() === activeEmail);
+          if (!stillListed) {
+            setVerifiedRole(null);
+            setIsAuthorized(false);
+            wipeUnauthorizedState();
+          }
+        }
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'authorizedUsers');
+      }
+    );
+
+    // 7. Auto Logging & Automation Settings Listener
     const unsubSettings = onSnapshot(
       doc(db, 'systemSettings', 'autoLogging'),
       (snapshot) => {
@@ -957,92 +1121,86 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     );
 
+    // 7b. GPS Geofence Configuration Listener
+    const unsubGeofence = onSnapshot(
+      doc(db, 'systemSettings', 'geofence'),
+      (snapshot) => {
+        if (snapshot.exists()) {
+          const cloudGeo = snapshot.data() as Partial<GpsGeofenceSettings>;
+          setGeofenceSettings((prev) => {
+            const merged = { ...prev, ...cloudGeo };
+            try {
+              localStorage.setItem('uenr_geofence_settings', JSON.stringify(merged));
+            } catch {}
+            return merged;
+          });
+        }
+      },
+      (error) => {
+        console.warn('[Firestore] Geofence settings listen notice:', error);
+      }
+    );
+
+    // 8. Student QR Check-In Queue Listener (processes student check-in tickets securely)
+    const unsubQrCheckIns = onSnapshot(
+      query(collection(db, 'qrCheckIns'), where('status', '==', 'pending')),
+      (snapshot) => {
+        const pending: Array<Record<string, any>> = [];
+        snapshot.forEach((d) => {
+          pending.push({ id: d.id, ...d.data() });
+        });
+        pendingQrTicketsRef.current = pending;
+        if (pending.length > 0) {
+          processPendingQrTickets();
+        }
+      },
+      (error) => {
+        console.warn('[Firestore] QR Check-in queue notice:', error);
+      }
+    );
+
     return () => {
-      unsubAuthUsers();
+      unsubStudents();
+      unsubCourses();
+      unsubTimetable();
       unsubAttendance();
       unsubLogs();
+      unsubAuthUsers();
       unsubSettings();
+      unsubGeofence();
+      unsubQrCheckIns();
     };
-  }, [firebaseUser]);
-
-  // Auto Sign-in Engine Handlers
-  const toggleAutoSignIn = useCallback((enable?: boolean) => {
-    setIsAutoSignIn((prev) => {
-      const next = enable !== undefined ? enable : !prev;
-      try {
-        localStorage.setItem('uenr_auto_signin', String(next));
-      } catch (e) {
-        console.warn('Unable to persist auto-signin preference:', e);
-      }
-      return next;
-    });
-  }, []);
-
-  const autoSignInAsMaster = useCallback(() => {
-    const masterProfile: CurrentUser = {
-      name: 'Jones Darko',
-      email: MASTER_HOD_EMAIL,
-      role: 'hod',
-      department: 'Department of Information Technology'
-    };
-    setCurrentUser(masterProfile);
-    setIsAutoSignIn(true);
-    try {
-      localStorage.setItem('uenr_auto_signin', 'true');
-      localStorage.setItem('uenr_current_user_profile', JSON.stringify(masterProfile));
-    } catch (e) {
-      console.warn('Unable to store master profile:', e);
-    }
-  }, []);
+  }, [isAuthorized, firebaseUser, wipeUnauthorizedState, processPendingQrTickets]);
 
   // Auth Actions
   const loginWithGoogle = async (forcePrompt = false) => {
     try {
-      setIsAuthLoading(true);
       await signInWithGoogle(forcePrompt);
-      // Automatically remember session so user is never prompted repeatedly
-      setIsAutoSignIn(true);
-      try {
-        localStorage.setItem('uenr_auto_signin', 'true');
-      } catch (e) {
-        console.warn(e);
-      }
     } catch (err) {
       console.error('Sign-in failed:', err);
       throw err;
-    } finally {
-      setIsAuthLoading(false);
     }
   };
 
   const switchAccount = async () => {
     try {
-      setIsAuthLoading(true);
+      wipeUnauthorizedState();
+      setVerifiedRole(null);
+      setIsAuthorized(false);
       await logOut();
-      // Force account prompt so user can select a different Gmail account
       await signInWithGoogle(true);
-      setIsAutoSignIn(true);
-      try {
-        localStorage.setItem('uenr_auto_signin', 'true');
-      } catch (e) {
-        console.warn(e);
-      }
     } catch (err) {
       console.error('Switch account failed:', err);
       throw err;
-    } finally {
-      setIsAuthLoading(false);
     }
   };
 
   const logoutUser = async () => {
     try {
-      setIsAutoSignIn(false);
-      try {
-        localStorage.setItem('uenr_auto_signin', 'false');
-      } catch (e) {
-        console.warn(e);
-      }
+      wipeUnauthorizedState();
+      setVerifiedRole(null);
+      setIsAuthorized(false);
+      setCurrentUserState(GUEST_USER);
       await logOut();
     } catch (err) {
       console.error('Logout failed:', err);
@@ -1052,26 +1210,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Manage Authorized Users (HOD can assign Lecturer & Class Rep; Lecturer can assign Class Rep ONLY)
   const addAuthorizedUser = async (userData: Omit<AuthorizedUser, 'id' | 'addedAt'>) => {
-    // Institutional RBAC policy:
-    // - Class Reps have zero assignment privileges
-    // - Lecturers can assign Class Representatives ONLY
-    // - HODs can assign Course Lecturers and Class Representatives
-    if (currentUser.role === 'class_rep') {
+    if (verifiedRole === 'class_rep' || currentUser.role === 'class_rep') {
       alert('Class Representatives do not have permission to authorize or assign personnel.');
       return;
     }
-    if (currentUser.role === 'lecturer' && userData.role !== 'class_rep') {
+    if ((verifiedRole === 'lecturer' || currentUser.role === 'lecturer') && userData.role !== 'class_rep') {
       alert('Course Lecturers are only authorized to assign Class Representatives.');
       return;
     }
 
     const cleanEmail = userData.email.toLowerCase().trim();
     const id = `auth-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_')}`;
+    const addedAt = new Date().toISOString().split('T')[0];
+
     const newUser: AuthorizedUser = {
-      ...userData,
       id,
+      name: userData.name.trim(),
       email: cleanEmail,
-      addedAt: new Date().toISOString().split('T')[0]
+      role: userData.role,
+      department: userData.department || 'Department of Information Technology',
+      ...(userData.courseAssigned ? { courseAssigned: userData.courseAssigned } : {}),
+      ...(userData.level ? { level: userData.level } : {}),
+      ...(userData.stream ? { stream: userData.stream } : {}),
+      addedAt
     };
 
     setAuthorizedUsers((prev) => {
@@ -1085,9 +1246,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       'timetable'
     );
 
-    if (firebaseUser) {
+    if (isAuthorized && firebaseUser && !firebaseUser.isAnonymous) {
       try {
         await setDoc(doc(db, 'authorizedUsers', newUser.id), newUser);
+        await setDoc(doc(db, 'authorizedEmails', cleanEmail), {
+          email: cleanEmail,
+          name: newUser.name,
+          role: newUser.role,
+          department: newUser.department || 'Department of Information Technology',
+          addedAt
+        });
       } catch (error) {
         handleFirestoreError(error, OperationType.CREATE, `authorizedUsers/${newUser.id}`);
       }
@@ -1101,15 +1269,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
-    // Role-based revocation policy:
-    // - Class Reps cannot revoke anyone
-    // - Lecturers can ONLY revoke Class Representatives
-    // - HODs can revoke Lecturers and Class Representatives
-    if (currentUser.role === 'class_rep') {
+    if (verifiedRole === 'class_rep' || currentUser.role === 'class_rep') {
       alert('Class Representatives do not have permission to revoke personnel access.');
       return;
     }
-    if (currentUser.role === 'lecturer' && toRemove?.role !== 'class_rep') {
+    if ((verifiedRole === 'lecturer' || currentUser.role === 'lecturer') && toRemove?.role !== 'class_rep') {
       alert('Course Lecturers can only revoke Class Representatives.');
       return;
     }
@@ -1123,9 +1287,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
     }
 
-    if (firebaseUser) {
+    if (isAuthorized && firebaseUser && !firebaseUser.isAnonymous) {
       try {
         await deleteDoc(doc(db, 'authorizedUsers', id));
+        if (toRemove?.email) {
+          await deleteDoc(doc(db, 'authorizedEmails', toRemove.email.toLowerCase().trim()));
+        }
       } catch (error) {
         handleFirestoreError(error, OperationType.DELETE, `authorizedUsers/${id}`);
       }
@@ -1285,8 +1452,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     if (docsToSaveInCloud.length > 0 || clearExisting) {
-      // 1. Immediately update React state & localStorage for zero UI lag (sorted alphabetically)
-      const sorted = sortAlphabetically(finalRoster);
+      // 1. Immediately update React state & localStorage for zero UI lag (sorted alphabetically and deduplicated)
+      const sorted = deduplicateStudents(finalRoster);
       setStudents(sorted);
       try {
         localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(sorted));
@@ -1788,16 +1955,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Attendance Actions
-  const matchAttendanceStream = (recordStream?: string, requestedStream?: string) => {
-    if (!requestedStream || requestedStream === 'All' || requestedStream === 'all' || requestedStream === 'All Streams') {
-      return !recordStream || recordStream === 'All' || recordStream === 'all' || recordStream === 'All Streams';
-    }
-    if (recordStream === requestedStream) return true;
-    if (requestedStream === 'IT A' && (recordStream === 'L200 IT-A' || recordStream === 'IT 200 A')) return true;
-    if (requestedStream === 'L200 IT-A' && (recordStream === 'IT A' || recordStream === 'IT 200 A')) return true;
-    if (requestedStream === 'IT 200 A' && (recordStream === 'IT A' || recordStream === 'L200 IT-A')) return true;
-    return false;
-  };
 
   const getAttendanceForSession = (date: string, courseId: string, stream?: string) => {
     return attendanceRecords.find(
@@ -1811,7 +1968,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     records: Record<string, 'present' | 'absent'>,
     biometricVerifiedIds: string[] = [],
     finalize: boolean = false,
-    stream?: string
+    stream?: string,
+    gpsVerifiedIds?: string[]
   ) => {
     const course = courses.find((c) => c.id === courseId);
     const presentCount = Object.values(records).filter((s) => s === 'present').length;
@@ -1822,18 +1980,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const existingIdx = attendanceRecords.findIndex(
       (r) => r.date === date && r.courseId === courseId && matchAttendanceStream(r.stream, normalizedStream)
     );
-    const streamSuffix = normalizedStream ? `-${normalizedStream.replace(/\s+/g, '_')}` : '';
+    const streamSuffix = normalizedStream ? `-${normalizedStream.replace(/[^a-zA-Z0-9_-]/g, '_')}` : '';
     const recordId = existingIdx >= 0 ? attendanceRecords[existingIdx].id : `att-${date}-${courseId}${streamSuffix}`;
+    const resolvedGpsIds =
+      gpsVerifiedIds !== undefined
+        ? gpsVerifiedIds
+        : existingIdx >= 0
+        ? attendanceRecords[existingIdx].gpsVerifiedStudentIds || []
+        : [];
 
     const updatedRecord: AttendanceRecord = {
       id: recordId,
       date,
       courseId,
-      stream: normalizedStream,
+      ...(normalizedStream ? { stream: normalizedStream } : {}),
       isFinalized: finalize,
-      finalizedAt: finalize ? new Date().toISOString() : undefined,
+      ...(finalize ? { finalizedAt: new Date().toISOString() } : {}),
       records,
-      biometricVerifiedStudentIds: biometricVerifiedIds
+      biometricVerifiedStudentIds: biometricVerifiedIds,
+      gpsVerifiedStudentIds: resolvedGpsIds
     };
 
     setAttendanceRecords((prev) => {
@@ -1901,7 +2066,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     indexNumber: string,
     date: string,
     courseId: string,
-    stream?: string
+    stream?: string,
+    gpsMeta?: { gpsVerified?: boolean; distanceMeters?: number }
   ) => {
     const cleanInput = indexNumber.trim().toUpperCase();
     const normalizedInput = cleanInput.replace(/[^A-Z0-9]/g, '');
@@ -1955,15 +2121,58 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     };
 
-    // Find existing session
+    // Find existing session locally
     const existingIdx = attendanceRecords.findIndex(
       (r) => r.date === date && r.courseId === courseId && matchAttendanceStream(r.stream, normalizedStream)
     );
-
     const existingRecord = existingIdx >= 0 ? attendanceRecords[existingIdx] : null;
 
-    // Check if already marked present
-    if (existingRecord && existingRecord.records && existingRecord.records[student.id] === 'present') {
+    // Determine deterministic record ID for this lecture session
+    const streamSuffix = normalizedStream ? `-${normalizedStream.replace(/[^a-zA-Z0-9_-]/g, '_')}` : '';
+    const recordId = existingRecord ? existingRecord.id : `att-${date}-${courseId}${streamSuffix}`;
+
+    // Pre-check cloud session doc if available
+    let cloudIsFinalized = false;
+    let cloudRecords: Record<string, 'present' | 'absent'> = {};
+    let cloudGpsIds: string[] = [];
+    try {
+      const snap = await getDoc(doc(db, 'attendance', recordId));
+      if (snap.exists()) {
+        const cData = snap.data() as AttendanceRecord;
+        cloudIsFinalized = Boolean(cData.isFinalized);
+        if (cData.records) {
+          cloudRecords = cData.records;
+        }
+        if (Array.isArray(cData.gpsVerifiedStudentIds)) {
+          cloudGpsIds = cData.gpsVerifiedStudentIds;
+        }
+      }
+    } catch (e) {
+      console.warn('[Firestore] Pre-fetch check notice (proceeding):', e);
+    }
+
+    if (cloudIsFinalized || existingRecord?.isFinalized) {
+      return {
+        success: false,
+        message: 'This lecture attendance session has been finalized and locked by the lecturer. Check-in is now closed.'
+      };
+    }
+
+    const baseGpsIds = Array.from(
+      new Set([...(existingRecord?.gpsVerifiedStudentIds || []), ...cloudGpsIds])
+    );
+    const nextGpsIds = gpsMeta?.gpsVerified
+      ? Array.from(new Set([...baseGpsIds, student.id]))
+      : baseGpsIds;
+
+    // Check if already marked present in either local state or cloud
+    const wasAlreadyPresent = (existingRecord?.records?.[student.id] === 'present') || (cloudRecords[student.id] === 'present');
+    if (wasAlreadyPresent) {
+      if (gpsMeta?.gpsVerified && !baseGpsIds.includes(student.id)) {
+        try {
+          await setDoc(doc(db, 'attendance', recordId), { gpsVerifiedStudentIds: nextGpsIds }, { merge: true });
+        } catch {}
+      }
       const stats = calculateStats(false);
       return {
         success: true,
@@ -1975,26 +2184,55 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    // Mark as present
-    const streamSuffix = normalizedStream ? `-${normalizedStream.replace(/\s+/g, '_')}` : '';
-    const recordId = existingRecord ? existingRecord.id : `att-${date}-${courseId}${streamSuffix}`;
-    const currentRecords = existingRecord ? { ...existingRecord.records } : {};
-    currentRecords[student.id] = 'present';
+    // Merge student as present
+    const updatedRecords = {
+      ...(existingRecord ? existingRecord.records : {}),
+      ...cloudRecords,
+      [student.id]: 'present' as const
+    };
 
     const updatedRecord: AttendanceRecord = {
       id: recordId,
       date,
       courseId,
-      stream: normalizedStream,
+      ...(normalizedStream ? { stream: normalizedStream } : {}),
       isFinalized: false,
-      records: currentRecords,
-      biometricVerifiedStudentIds: existingRecord ? existingRecord.biometricVerifiedStudentIds || [] : []
+      records: updatedRecords,
+      biometricVerifiedStudentIds: existingRecord ? existingRecord.biometricVerifiedStudentIds || [] : [],
+      gpsVerifiedStudentIds: nextGpsIds
     };
 
+    // 1. Commit directly to Firestore with { merge: true } so concurrent student submissions don't overwrite each other
+    try {
+      await setDoc(
+        doc(db, 'attendance', recordId),
+        {
+          id: recordId,
+          date,
+          courseId,
+          stream: normalizedStream || null,
+          isFinalized: false,
+          gpsVerifiedStudentIds: nextGpsIds,
+          records: {
+            [student.id]: 'present'
+          }
+        },
+        { merge: true }
+      );
+    } catch (err: any) {
+      console.error('[Firestore] QR Check-In Cloud Write Error:', err);
+      return {
+        success: false,
+        message: 'Unable to sync attendance to the lecturer’s cloud session. Please verify your internet connection and try again.'
+      };
+    }
+
+    // 2. Update local state and offline cache
     setAttendanceRecords((prev) => {
-      if (existingIdx >= 0) {
+      const idx = prev.findIndex((r) => r.id === recordId);
+      if (idx >= 0) {
         const copy = [...prev];
-        copy[existingIdx] = updatedRecord;
+        copy[idx] = updatedRecord;
         return copy;
       }
       return [...prev, updatedRecord];
@@ -2004,18 +2242,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify([...attendanceRecords.filter(r => r.id !== recordId), updatedRecord]));
     } catch (e) {}
 
-    // Sync to Firestore
+    // 3. Write immutable audit log
     try {
-      await setDoc(doc(db, 'attendance', recordId), updatedRecord);
-    } catch (err) {
-      console.warn('[Firestore] Note syncing QR check-in:', err);
+      const gpsTag = gpsMeta?.gpsVerified
+        ? ` [GPS Verified${typeof gpsMeta.distanceMeters === 'number' ? `, ~${gpsMeta.distanceMeters}m from hall` : ''}]`
+        : '';
+      await addAuditLog(
+        gpsMeta?.gpsVerified ? 'GPS Check-In' : 'QR Check-In',
+        `${student.name} (${student.indexNumber}) checked in for ${course?.code || 'lecture'}${gpsTag}`,
+        'attendance'
+      );
+    } catch (e) {
+      console.warn('Audit log write notice:', e);
     }
-
-    await addAuditLog(
-      'QR Check-In',
-      `${student.name} (${student.indexNumber}) checked in via Classroom QR for ${course?.code || 'lecture'}`,
-      'attendance'
-    );
 
     const stats = calculateStats(true);
     return {
@@ -2027,6 +2266,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       stats
     };
   };
+
+  checkInStudentWithIndexRef.current = checkInStudentWithIndex;
 
   // Database Management Functions
   const forceSyncCloudDatabase = async (): Promise<{ success: boolean; count: number; error?: string }> => {
@@ -2058,6 +2299,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       authorizedUsers.forEach((u) => {
         batch.set(doc(db, 'authorizedUsers', u.id), u);
         count++;
+        const cleanEmail = (u.email || '').toLowerCase().trim();
+        if (cleanEmail) {
+          batch.set(doc(db, 'authorizedEmails', cleanEmail), {
+            email: cleanEmail,
+            name: u.name,
+            role: u.role,
+            department: u.department || 'Department of Information Technology',
+            addedAt: u.addedAt || new Date().toISOString().split('T')[0]
+          });
+          count++;
+        }
       });
 
       auditLogs.slice(0, 30).forEach((l) => {
@@ -2218,11 +2470,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const resetToDefaults = () => {
     setStudents([]);
-    setCourses(INITIAL_COURSES);
-    setTimetable(INITIAL_TIMETABLE);
+    setCourses([]);
+    setTimetable([]);
     setAttendanceRecords([]);
-    setAuthorizedUsers(INITIAL_AUTHORIZED_USERS);
-    localStorage.clear();
+    setAuthorizedUsers([]);
+    clearSensitiveStorage();
   };
 
   return (
@@ -2236,6 +2488,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         semester,
         activeTab,
         setActiveTab,
+        attendanceLaunchTarget,
+        launchAttendanceSession,
+        clearAttendanceLaunchTarget,
         adminSubTab,
         setAdminSubTab,
         openDatabaseTab,
@@ -2255,13 +2510,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isAuthLoading,
         isCloudConnected,
         isAuthorized,
+        verifiedRole,
         authorizedUsers,
         loginWithGoogle,
         logoutUser,
         switchAccount,
-        isAutoSignIn,
-        toggleAutoSignIn,
-        autoSignInAsMaster,
         addAuthorizedUser,
         removeAuthorizedUser,
         isSyncing,
@@ -2296,6 +2549,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         saveAttendance,
         unlockAttendance,
         checkInStudentWithIndex,
+        geofenceSettings,
+        updateGeofenceSettings,
         addAuditLog,
         autoLoggingSettings,
         updateAutoLoggingSettings,

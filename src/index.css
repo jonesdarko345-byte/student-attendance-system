@@ -5,8 +5,8 @@
 /* Mobile Viewport Lock & Horizontal Overflow Protection */
 html,
 body {
-  overflow-x: hidden;
-  max-width: 100vw;
+  overflow-x: clip;
+  max-width: 100%;
   width: 100%;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;

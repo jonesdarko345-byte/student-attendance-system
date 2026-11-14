@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { useApp, NavigationTab } from '../context/AppContext';
 import {
   LayoutDashboard,
@@ -22,7 +22,6 @@ import {
   Sun,
   Moon,
   Laptop,
-  Zap,
   ChevronDown,
   X,
   LogIn,
@@ -52,10 +51,106 @@ export const Header: React.FC = () => {
     setTheme,
     logoutUser,
     switchAccount,
-    isAutoSignIn,
-    toggleAutoSignIn,
+    verifiedRole,
     clearAllStudents
   } = useApp();
+
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!isRoleMenuOpen) return;
+
+    const html = document.documentElement;
+    const body = document.body;
+
+    const prevHtmlOverflow = html.style.overflow;
+    const prevBodyOverflow = body.style.overflow;
+    const prevHtmlOverscroll = html.style.overscrollBehavior;
+    const prevBodyOverscroll = body.style.overscrollBehavior;
+    const prevBodyPaddingRight = body.style.paddingRight;
+
+    const scrollbarWidth = window.innerWidth - html.clientWidth;
+    if (scrollbarWidth > 0) {
+      const computedPadding = parseFloat(window.getComputedStyle(body).paddingRight) || 0;
+      body.style.paddingRight = `${computedPadding + scrollbarWidth}px`;
+    }
+
+    html.style.overflow = 'hidden';
+    body.style.overflow = 'hidden';
+    html.style.overscrollBehavior = 'none';
+    body.style.overscrollBehavior = 'none';
+
+    let lastTouchY = 0;
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 1) {
+        lastTouchY = e.touches[0].clientY;
+      }
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      const menu = menuRef.current;
+      if (!menu || !menu.contains(e.target as Node)) {
+        e.preventDefault();
+        return;
+      }
+
+      if (menu.scrollHeight <= menu.clientHeight) {
+        e.preventDefault();
+        return;
+      }
+
+      const currentY = e.touches[0].clientY;
+      const deltaY = lastTouchY - currentY;
+      lastTouchY = currentY;
+
+      const atTop = menu.scrollTop <= 0 && deltaY < 0;
+      const atBottom =
+        menu.scrollTop + menu.clientHeight >= menu.scrollHeight - 1 && deltaY > 0;
+
+      if (atTop || atBottom) {
+        e.preventDefault();
+      }
+    };
+
+    const onWheel = (e: WheelEvent) => {
+      const menu = menuRef.current;
+      if (!menu || !menu.contains(e.target as Node)) {
+        e.preventDefault();
+        return;
+      }
+
+      if (menu.scrollHeight <= menu.clientHeight) {
+        e.preventDefault();
+        return;
+      }
+
+      const atTop = menu.scrollTop <= 0 && e.deltaY < 0;
+      const atBottom =
+        menu.scrollTop + menu.clientHeight >= menu.scrollHeight - 1 && e.deltaY > 0;
+
+      if (atTop || atBottom) {
+        e.preventDefault();
+      }
+    };
+
+    document.addEventListener('touchstart', onTouchStart, { passive: true });
+    document.addEventListener('touchmove', onTouchMove, { passive: false });
+    document.addEventListener('wheel', onWheel, { passive: false });
+
+    return () => {
+      document.removeEventListener('touchstart', onTouchStart);
+      document.removeEventListener('touchmove', onTouchMove);
+      document.removeEventListener('wheel', onWheel);
+
+      html.style.overflow = prevHtmlOverflow;
+      body.style.overflow = prevBodyOverflow;
+      html.style.overscrollBehavior = prevHtmlOverscroll;
+      body.style.overscrollBehavior = prevBodyOverscroll;
+      body.style.paddingRight = prevBodyPaddingRight;
+    };
+  }, [isRoleMenuOpen]);
 
   const navItems: { id: NavigationTab; label: string; icon: React.FC<{ className?: string }> }[] = [
     { id: 'home', label: 'Dashboard', icon: LayoutDashboard },
@@ -87,9 +182,12 @@ export const Header: React.FC = () => {
   const currentRoleMeta = getRoleBadge(currentUser.role);
 
   return (
-    <header className="sticky top-0 z-50 bg-[#003b5c] text-white shadow-md border-b border-[#002840]">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-16 sm:h-20">
+    <header
+      className="sticky top-0 z-50 w-full bg-[#003b5c] text-white shadow-md border-b border-[#002840]"
+      style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}
+    >
+      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
+        <div className="flex items-center justify-between gap-2 sm:gap-4 min-h-[60px] h-16 sm:h-20">
           
           {/* Logo & School Title */}
           <button
@@ -98,7 +196,7 @@ export const Header: React.FC = () => {
               if (isRoleMenuOpen) setIsRoleMenuOpen(false);
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
-            className="flex items-center gap-2.5 sm:gap-3 text-left focus:outline-none group cursor-pointer min-w-0 active:scale-95 transition-transform duration-150"
+            className="flex items-center gap-2 sm:gap-3 text-left focus:outline-none group cursor-pointer min-w-0 flex-1 lg:flex-none min-h-[44px] py-1 active:scale-95 transition-transform duration-150"
             title="Return to Dashboard"
             aria-label="Return to UENR Attendance Dashboard"
           >
@@ -145,15 +243,16 @@ export const Header: React.FC = () => {
           </nav>
 
           {/* Right Action & Profile Area */}
-          <div className="flex items-center gap-2 sm:gap-3">
+          <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
             {/* Network & Cloud Status Indicator */}
             {!isOnline ? (
               <div
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/25 border border-amber-400/50 text-[11px] font-bold text-amber-200"
+                className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1 rounded-lg bg-amber-500/25 border border-amber-400/50 text-[11px] font-bold text-amber-200 shrink-0 whitespace-nowrap"
                 title="Device is offline. Showing locally saved timetable and data."
               >
-                <WifiOff className="w-3.5 h-3.5 text-amber-300" />
-                <span>Offline (Cached)</span>
+                <WifiOff className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+                <span className="sm:hidden">Offline</span>
+                <span className="hidden sm:inline">Offline (Cached)</span>
               </div>
             ) : isPoorConnection ? (
               <div
@@ -194,7 +293,7 @@ export const Header: React.FC = () => {
             <button
               type="button"
               onClick={toggleTheme}
-              className="flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-black/25 hover:bg-black/40 border border-white/15 text-slate-200 hover:text-amber-300 transition-all duration-200 cursor-pointer relative group"
+              className="flex items-center justify-center w-10 h-10 sm:w-9 sm:h-9 rounded-xl bg-black/25 hover:bg-black/40 border border-white/15 text-slate-200 hover:text-amber-300 transition-all duration-200 cursor-pointer relative group shrink-0"
               title={isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode for low-light environment"}
               aria-label="Toggle light and dark mode"
             >
@@ -206,11 +305,11 @@ export const Header: React.FC = () => {
             </button>
 
             {/* User Profile & Role Settings - Always Visible on Mobile and Desktop */}
-            <div className="relative">
+            <div className="relative shrink-0">
               <button
                 type="button"
                 onClick={() => setIsRoleMenuOpen(!isRoleMenuOpen)}
-                className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-2.5 py-1.5 rounded-xl bg-[#006b78] hover:bg-[#007c82] active:bg-[#005761] text-white text-xs font-medium border border-teal-400/40 transition-colors shadow-sm cursor-pointer"
+                className="flex items-center gap-1.5 sm:gap-2 min-h-[40px] px-2 sm:px-2.5 py-1.5 rounded-xl bg-[#006b78] hover:bg-[#007c82] active:bg-[#005761] text-white text-xs font-medium border border-teal-400/40 transition-colors shadow-sm cursor-pointer whitespace-nowrap"
                 title="Switch active role and account options"
                 aria-label="Switch active role and account options"
                 aria-expanded={isRoleMenuOpen}
@@ -256,13 +355,14 @@ export const Header: React.FC = () => {
                 <>
                   {/* Backdrop overlay on mobile/desktop */}
                   <div
-                    className="fixed inset-0 bg-black/50 backdrop-blur-xs z-40 transition-opacity"
+                    className="fixed inset-0 bg-black/50 backdrop-blur-xs z-40 transition-opacity touch-none overscroll-none"
                     onClick={() => setIsRoleMenuOpen(false)}
                   />
 
                   {/* Responsive Role & Account Menu Modal/Dropdown */}
                   <div
-                    className="fixed inset-x-3 top-16 sm:absolute sm:inset-auto sm:right-0 sm:top-full sm:mt-2 w-auto sm:w-88 max-h-[85vh] overflow-y-auto bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 py-2.5 text-slate-800 dark:text-slate-100 z-50 animate-in fade-in zoom-in-95 duration-100"
+                    ref={menuRef}
+                    className="fixed inset-x-3 top-[calc(4.25rem+env(safe-area-inset-top,0px))] sm:absolute sm:inset-auto sm:right-0 sm:top-full sm:mt-2 w-auto sm:w-88 max-h-[calc(100dvh-5.5rem-env(safe-area-inset-top,0px))] sm:max-h-[85vh] overflow-y-auto overscroll-contain touch-pan-y bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 py-2.5 text-slate-800 dark:text-slate-100 z-50 animate-in fade-in zoom-in-95 duration-100"
                     onClick={(e) => e.stopPropagation()}
                   >
                     {/* Modal Top Header Bar with Close Button */}
@@ -321,93 +421,97 @@ export const Header: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* Role Switcher */}
-                    <div className="py-2.5 px-3 border-b border-slate-100 dark:border-slate-800">
-                      <div className="px-1 py-1 text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center justify-between">
-                        <span>Switch Active Role</span>
-                        <span className="text-[10px] text-teal-600 dark:text-teal-400 font-medium">Tap to change</span>
-                      </div>
-                      
-                      <div className="space-y-1.5 mt-1">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setCurrentUser((prev) => ({ ...prev, role: 'hod' }));
-                            setIsRoleMenuOpen(false);
-                          }}
-                          className={`w-full flex items-center justify-between p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
-                            currentUser.role === 'hod'
-                              ? 'border-purple-500/60 bg-purple-50 dark:bg-purple-950/40 text-purple-900 dark:text-purple-200 font-bold ring-1 ring-purple-400/40'
-                              : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2.5">
-                            <div className="w-8 h-8 rounded-lg bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 flex items-center justify-center flex-shrink-0">
-                              <Building2 className="w-4 h-4" />
-                            </div>
-                            <div>
-                              <div className="text-xs font-bold">Head of Department (HOD)</div>
-                              <p className="text-[10px] text-slate-500 dark:text-slate-400 font-normal">Full admin, staff whitelist, roster control</p>
-                            </div>
-                          </div>
-                          {currentUser.role === 'hod' && (
-                            <Check className="w-4 h-4 text-purple-600 dark:text-purple-400 flex-shrink-0" />
+                    {/* Role Preview Switcher (Strictly bounded by verifiedRole) */}
+                    {(verifiedRole === 'hod' || verifiedRole === 'lecturer') && (
+                      <div className="py-2.5 px-3 border-b border-slate-100 dark:border-slate-800">
+                        <div className="px-1 py-1 text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                          <span>Switch Active View</span>
+                          <span className="text-[10px] text-teal-600 dark:text-teal-400 font-medium">Tap to change</span>
+                        </div>
+                        
+                        <div className="space-y-1.5 mt-1">
+                          {verifiedRole === 'hod' && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCurrentUser((prev) => ({ ...prev, role: 'hod' }));
+                                setIsRoleMenuOpen(false);
+                              }}
+                              className={`w-full flex items-center justify-between p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                                currentUser.role === 'hod'
+                                  ? 'border-purple-500/60 bg-purple-50 dark:bg-purple-950/40 text-purple-900 dark:text-purple-200 font-bold ring-1 ring-purple-400/40'
+                                  : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2.5">
+                                <div className="w-8 h-8 rounded-lg bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 flex items-center justify-center flex-shrink-0">
+                                  <Building2 className="w-4 h-4" />
+                                </div>
+                                <div>
+                                  <div className="text-xs font-bold">Head of Department (HOD)</div>
+                                  <p className="text-[10px] text-slate-500 dark:text-slate-400 font-normal">Full admin, staff whitelist, roster control</p>
+                                </div>
+                              </div>
+                              {currentUser.role === 'hod' && (
+                                <Check className="w-4 h-4 text-purple-600 dark:text-purple-400 flex-shrink-0" />
+                              )}
+                            </button>
                           )}
-                        </button>
 
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setCurrentUser((prev) => ({ ...prev, role: 'lecturer' }));
-                            setIsRoleMenuOpen(false);
-                          }}
-                          className={`w-full flex items-center justify-between p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
-                            currentUser.role === 'lecturer'
-                              ? 'border-teal-500/60 bg-teal-50 dark:bg-teal-950/40 text-teal-900 dark:text-teal-200 font-bold ring-1 ring-teal-400/40'
-                              : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2.5">
-                            <div className="w-8 h-8 rounded-lg bg-teal-100 dark:bg-teal-900/50 text-teal-700 dark:text-teal-300 flex items-center justify-center flex-shrink-0">
-                              <UserCheck className="w-4 h-4" />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCurrentUser((prev) => ({ ...prev, role: 'lecturer' }));
+                              setIsRoleMenuOpen(false);
+                            }}
+                            className={`w-full flex items-center justify-between p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                              currentUser.role === 'lecturer'
+                                ? 'border-teal-500/60 bg-teal-50 dark:bg-teal-950/40 text-teal-900 dark:text-teal-200 font-bold ring-1 ring-teal-400/40'
+                                : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-8 h-8 rounded-lg bg-teal-100 dark:bg-teal-900/50 text-teal-700 dark:text-teal-300 flex items-center justify-center flex-shrink-0">
+                                <UserCheck className="w-4 h-4" />
+                              </div>
+                              <div>
+                                <div className="text-xs font-bold">Lecturer Mode</div>
+                                <p className="text-[10px] text-slate-500 dark:text-slate-400 font-normal">Mark roll calls, enroll biometrics, view reports</p>
+                              </div>
                             </div>
-                            <div>
-                              <div className="text-xs font-bold">Lecturer Mode</div>
-                              <p className="text-[10px] text-slate-500 dark:text-slate-400 font-normal">Mark roll calls, enroll biometrics, view reports</p>
-                            </div>
-                          </div>
-                          {currentUser.role === 'lecturer' && (
-                            <Check className="w-4 h-4 text-teal-600 dark:text-teal-400 flex-shrink-0" />
-                          )}
-                        </button>
+                            {currentUser.role === 'lecturer' && (
+                              <Check className="w-4 h-4 text-teal-600 dark:text-teal-400 flex-shrink-0" />
+                            )}
+                          </button>
 
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setCurrentUser((prev) => ({ ...prev, role: 'class_rep' }));
-                            setIsRoleMenuOpen(false);
-                          }}
-                          className={`w-full flex items-center justify-between p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
-                            currentUser.role === 'class_rep'
-                              ? 'border-blue-500/60 bg-blue-50 dark:bg-blue-950/40 text-blue-900 dark:text-blue-200 font-bold ring-1 ring-blue-400/40'
-                              : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2.5">
-                            <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 flex items-center justify-center flex-shrink-0">
-                              <GraduationCap className="w-4 h-4" />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCurrentUser((prev) => ({ ...prev, role: 'class_rep' }));
+                              setIsRoleMenuOpen(false);
+                            }}
+                            className={`w-full flex items-center justify-between p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                              currentUser.role === 'class_rep'
+                                ? 'border-blue-500/60 bg-blue-50 dark:bg-blue-950/40 text-blue-900 dark:text-blue-200 font-bold ring-1 ring-blue-400/40'
+                                : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 flex items-center justify-center flex-shrink-0">
+                                <GraduationCap className="w-4 h-4" />
+                              </div>
+                              <div>
+                                <div className="text-xs font-bold">Class Representative Mode</div>
+                                <p className="text-[10px] text-slate-500 dark:text-slate-400 font-normal">In-class attendance assistance</p>
+                              </div>
                             </div>
-                            <div>
-                              <div className="text-xs font-bold">Class Representative Mode</div>
-                              <p className="text-[10px] text-slate-500 dark:text-slate-400 font-normal">In-class attendance assistance</p>
-                            </div>
-                          </div>
-                          {currentUser.role === 'class_rep' && (
-                            <Check className="w-4 h-4 text-blue-600 dark:text-blue-400 flex-shrink-0" />
-                          )}
-                        </button>
+                            {currentUser.role === 'class_rep' && (
+                              <Check className="w-4 h-4 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                            )}
+                          </button>
+                        </div>
                       </div>
-                    </div>
+                    )}
 
                     {/* Theme Preference Segmented Toggle */}
                     <div className="px-4 py-2.5 border-b border-slate-100 dark:border-slate-800">
@@ -457,32 +561,6 @@ export const Header: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* Auto Sign-In Configuration */}
-                    <div className="px-4 py-2.5 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <Zap className={`w-4 h-4 ${isAutoSignIn ? 'text-amber-500 fill-amber-400' : 'text-slate-400'}`} />
-                          <div>
-                            <p className="text-xs font-bold text-slate-800 dark:text-slate-100">Auto Sign-In</p>
-                            <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                              {isAutoSignIn ? 'Active (No Gmail prompt on start)' : 'Paused (Will ask for login)'}
-                            </p>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => toggleAutoSignIn()}
-                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
-                            isAutoSignIn
-                              ? 'bg-emerald-600 text-white shadow-xs'
-                              : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
-                          }`}
-                        >
-                          {isAutoSignIn ? 'Enabled' : 'Disabled'}
-                        </button>
-                      </div>
-                    </div>
-
                     {/* Management Shortcuts */}
                     <div className="border-t border-slate-100 dark:border-slate-800 py-1.5">
                       <div className="px-4 py-1 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
@@ -501,19 +579,21 @@ export const Header: React.FC = () => {
                         <span>Manage Authorized Staff & Class Reps</span>
                       </button>
 
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (confirm('Are you sure you want to clear all students from the class roster?')) {
-                            clearAllStudents();
-                            setIsRoleMenuOpen(false);
-                          }
-                        }}
-                        className="w-full flex items-center gap-2.5 px-4 py-2 text-xs font-medium text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-900/20 text-left cursor-pointer"
-                      >
-                        <RotateCcw className="w-4 h-4 text-amber-600 dark:text-amber-400" />
-                        <span>Clear All Students in Class</span>
-                      </button>
+                      {(verifiedRole === 'hod' || verifiedRole === 'lecturer') && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (confirm('Are you sure you want to clear all students from the class roster?')) {
+                              clearAllStudents();
+                              setIsRoleMenuOpen(false);
+                            }
+                          }}
+                          className="w-full flex items-center gap-2.5 px-4 py-2 text-xs font-medium text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-900/20 text-left cursor-pointer"
+                        >
+                          <RotateCcw className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                          <span>Clear All Students in Class</span>
+                        </button>
+                      )}
                     </div>
 
 

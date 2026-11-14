@@ -12,8 +12,23 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function isVerifiedUser() {
+      return isSignedIn()
+        && request.auth.token.email_verified == true
+        && request.auth.token.email is string
+        && request.auth.token.email.size() > 0;
+    }
+
+    function userEmailLower() {
+      return request.auth.token.email.lower();
+    }
+
     function isValidId(id) {
       return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidEmailDocId(email) {
+      return email is string && email.size() >= 5 && email.size() <= 120 && email.matches('^[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}$');
     }
 
     function incoming() {
@@ -24,92 +39,330 @@ service cloud.firestore {
       return resource.data;
     }
 
-    // Master Admin Helper (Bootstrapped with project owner email)
+    // Master Admin (HOD) Helper
     function isAdmin() {
-      return isSignedIn() && (
-        request.auth.token.email == "jonesdarko345@gmail.com" ||
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      return isVerifiedUser() && (
+        userEmailLower() == "jonesdarko345@gmail.com" ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        (exists(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())) &&
+         get(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())).data.role == "hod")
       );
     }
 
-    // Connection Health Test Doc
+    // Authorized Lecturer or HOD Helper
+    function isLecturerOrAdmin() {
+      return isAdmin() || (
+        isVerifiedUser() &&
+        exists(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())) &&
+        get(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())).data.role in ["hod", "lecturer"]
+      );
+    }
+
+    // Any Authorized Academic Personnel (HOD, Lecturer, or Class Rep)
+    function isAuthorizedStaff() {
+      return isAdmin() || (
+        isVerifiedUser() &&
+        exists(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())) &&
+        get(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())).data.role in ["hod", "lecturer", "class_rep"]
+      );
+    }
+
+    // Validation Helpers (Anti-Update-Gap & Schema Integrity)
+    function isValidStudent(data) {
+      return data.keys().hasAll(['id', 'name', 'indexNumber', 'program', 'level'])
+        && data.keys().hasOnly(['id', 'name', 'indexNumber', 'email', 'program', 'level', 'stream', 'enrolledFingers', 'createdAt'])
+        && data.id is string && data.id.size() > 0 && data.id.size() <= 128
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 150
+        && data.indexNumber is string && data.indexNumber.size() > 0 && data.indexNumber.size() <= 50
+        && (!('email' in data) || data.email == null || (data.email is string && data.email.size() <= 120))
+        && data.program is string && data.program.size() <= 120
+        && data.level is string && data.level.size() <= 40
+        && (!('stream' in data) || data.stream == null || (data.stream is string && data.stream.size() <= 40))
+        && (!('enrolledFingers' in data) || (data.enrolledFingers is list && data.enrolledFingers.size() <= 10))
+        && (!('createdAt' in data) || data.createdAt == null || (data.createdAt is string && data.createdAt.size() <= 40));
+    }
+
+    function isValidCourse(data) {
+      return data.keys().hasAll(['id', 'code', 'title', 'creditHours', 'lecturer'])
+        && data.keys().hasOnly(['id', 'code', 'title', 'creditHours', 'lecturer', 'department'])
+        && data.id is string && data.id.size() > 0 && data.id.size() <= 128
+        && data.code is string && data.code.size() > 0 && data.code.size() <= 30
+        && data.title is string && data.title.size() > 0 && data.title.size() <= 200
+        && data.creditHours is number && data.creditHours >= 0 && data.creditHours <= 20
+        && data.lecturer is string && data.lecturer.size() <= 120
+        && (!('department' in data) || (data.department is string && data.department.size() <= 150));
+    }
+
+    function isValidTimetableSlot(data) {
+      return data.keys().hasAll(['id', 'courseId', 'dayOfWeek', 'startTime', 'endTime', 'venue'])
+        && data.keys().hasOnly(['id', 'courseId', 'dayOfWeek', 'startTime', 'endTime', 'venue', 'stream'])
+        && data.id is string && data.id.size() > 0 && data.id.size() <= 128
+        && data.courseId is string && data.courseId.size() > 0 && data.courseId.size() <= 128
+        && data.dayOfWeek is number && data.dayOfWeek >= 1 && data.dayOfWeek <= 6
+        && data.startTime is string && data.startTime.size() > 0 && data.startTime.size() <= 15
+        && data.endTime is string && data.endTime.size() > 0 && data.endTime.size() <= 15
+        && data.venue is string && data.venue.size() > 0 && data.venue.size() <= 120
+        && (!('stream' in data) || data.stream == null || (data.stream is string && data.stream.size() <= 40));
+    }
+
+    function isValidAttendance(data) {
+      return data.keys().hasAll(['id', 'date', 'courseId', 'isFinalized', 'records'])
+        && data.keys().hasOnly(['id', 'date', 'courseId', 'timetableSlotId', 'stream', 'isFinalized', 'finalizedAt', 'records', 'biometricVerifiedStudentIds', 'gpsVerifiedStudentIds'])
+        && data.id is string && data.id.size() > 0 && data.id.size() <= 128
+        && data.date is string && data.date.size() > 0 && data.date.size() <= 25
+        && data.courseId is string && data.courseId.size() > 0 && data.courseId.size() <= 128
+        && data.isFinalized is bool
+        && data.records is map
+        && (!('timetableSlotId' in data) || data.timetableSlotId == null || (data.timetableSlotId is string && data.timetableSlotId.size() <= 128))
+        && (!('stream' in data) || data.stream == null || (data.stream is string && data.stream.size() <= 40))
+        && (!('finalizedAt' in data) || data.finalizedAt == null || (data.finalizedAt is string && data.finalizedAt.size() <= 60))
+        && (!('biometricVerifiedStudentIds' in data) || (data.biometricVerifiedStudentIds is list && data.biometricVerifiedStudentIds.size() <= 2000))
+        && (!('gpsVerifiedStudentIds' in data) || (data.gpsVerifiedStudentIds is list && data.gpsVerifiedStudentIds.size() <= 2000));
+    }
+
+    function isValidAuditLog(data) {
+      return data.keys().hasAll(['id', 'action', 'details', 'timestamp', 'user', 'type'])
+        && data.keys().hasOnly(['id', 'action', 'details', 'timestamp', 'user', 'type'])
+        && data.id is string && data.id.size() > 0 && data.id.size() <= 128
+        && data.action is string && data.action.size() > 0 && data.action.size() <= 120
+        && data.details is string && data.details.size() <= 1000
+        && data.timestamp is string && data.timestamp.size() > 0 && data.timestamp.size() <= 60
+        && data.user is string && data.user.size() > 0 && data.user.size() <= 150
+        && data.type in ['attendance', 'biometric', 'student', 'timetable', 'security', 'system'];
+    }
+
+    function isValidAuthorizedUser(data) {
+      return data.keys().hasAll(['id', 'email', 'name', 'role'])
+        && data.keys().hasOnly(['id', 'email', 'name', 'role', 'department', 'courseAssigned', 'level', 'stream', 'addedAt'])
+        && data.id is string && data.id.size() > 0 && data.id.size() <= 128
+        && data.email is string && data.email.size() >= 5 && data.email.size() <= 120
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 120
+        && data.role in ['hod', 'lecturer', 'class_rep']
+        && (!('department' in data) || data.department == null || (data.department is string && data.department.size() <= 150))
+        && (!('courseAssigned' in data) || data.courseAssigned == null || (data.courseAssigned is string && data.courseAssigned.size() <= 150))
+        && (!('level' in data) || data.level == null || (data.level is string && data.level.size() <= 40))
+        && (!('stream' in data) || data.stream == null || (data.stream is string && data.stream.size() <= 40))
+        && (!('addedAt' in data) || data.addedAt == null || (data.addedAt is string && data.addedAt.size() <= 40));
+    }
+
+    function isValidAuthorizedEmail(data) {
+      return data.keys().hasAll(['email', 'role'])
+        && data.keys().hasOnly(['email', 'name', 'role', 'department', 'addedAt'])
+        && data.email is string && data.email.size() >= 5 && data.email.size() <= 120
+        && data.role in ['hod', 'lecturer', 'class_rep']
+        && (!('name' in data) || data.name == null || (data.name is string && data.name.size() <= 120))
+        && (!('department' in data) || data.department == null || (data.department is string && data.department.size() <= 150))
+        && (!('addedAt' in data) || data.addedAt == null || (data.addedAt is string && data.addedAt.size() <= 40));
+    }
+
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['id', 'email', 'displayName', 'role'])
+        && data.keys().hasOnly(['id', 'email', 'displayName', 'photoURL', 'role', 'department'])
+        && data.id is string && data.id.size() > 0 && data.id.size() <= 128
+        && data.email is string && data.email.size() <= 120
+        && data.displayName is string && data.displayName.size() <= 120
+        && data.role in ['hod', 'lecturer', 'class_rep']
+        && (!('photoURL' in data) || data.photoURL == null || (data.photoURL is string && data.photoURL.size() <= 500))
+        && (!('department' in data) || data.department == null || (data.department is string && data.department.size() <= 150));
+    }
+
+    function isValidQrCheckInCreate(data) {
+      return data.keys().hasAll(['id', 'submitterUid', 'indexNumber', 'courseId', 'date', 'status', 'createdAt'])
+        && data.keys().hasOnly(['id', 'submitterUid', 'indexNumber', 'courseId', 'courseCode', 'courseTitle', 'date', 'stream', 'status', 'gpsVerified', 'distanceMeters', 'createdAt'])
+        && data.id is string && data.id.size() > 0 && data.id.size() <= 128
+        && data.submitterUid == request.auth.uid
+        && data.indexNumber is string && data.indexNumber.size() > 0 && data.indexNumber.size() <= 30
+        && data.courseId is string && data.courseId.size() > 0 && data.courseId.size() <= 60
+        && data.date is string && data.date.size() > 0 && data.date.size() <= 20
+        && data.status == 'pending'
+        && data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 50
+        && (!('courseCode' in data) || data.courseCode == null || (data.courseCode is string && data.courseCode.size() <= 30))
+        && (!('courseTitle' in data) || data.courseTitle == null || (data.courseTitle is string && data.courseTitle.size() <= 150))
+        && (!('stream' in data) || data.stream == null || (data.stream is string && data.stream.size() <= 40))
+        && (!('gpsVerified' in data) || data.gpsVerified is bool)
+        && (!('distanceMeters' in data) || data.distanceMeters == null || (data.distanceMeters is number && data.distanceMeters >= 0 && data.distanceMeters <= 20000000));
+    }
+
+    function isValidQrCheckInUpdate(data) {
+      return data.keys().hasAll(['id', 'submitterUid', 'indexNumber', 'courseId', 'date', 'status', 'createdAt'])
+        && data.keys().hasOnly(['id', 'submitterUid', 'indexNumber', 'courseId', 'courseCode', 'courseTitle', 'date', 'stream', 'status', 'gpsVerified', 'distanceMeters', 'message', 'studentName', 'studentIndex', 'alreadyCheckedIn', 'stats', 'createdAt'])
+        && data.id == existing().id
+        && data.submitterUid == existing().submitterUid
+        && data.indexNumber == existing().indexNumber
+        && data.courseId == existing().courseId
+        && data.date == existing().date
+        && data.createdAt == existing().createdAt
+        && data.status in ['pending', 'confirmed', 'rejected']
+        && (!('gpsVerified' in data) || data.gpsVerified is bool)
+        && (!('distanceMeters' in data) || data.distanceMeters == null || (data.distanceMeters is number && data.distanceMeters >= 0 && data.distanceMeters <= 20000000))
+        && (!('message' in data) || data.message == null || (data.message is string && data.message.size() <= 300))
+        && (!('studentName' in data) || data.studentName == null || (data.studentName is string && data.studentName.size() <= 120))
+        && (!('studentIndex' in data) || data.studentIndex == null || (data.studentIndex is string && data.studentIndex.size() <= 30))
+        && (!('alreadyCheckedIn' in data) || data.alreadyCheckedIn is bool)
+        && (!('stats' in data) || data.stats == null || data.stats is map);
+    }
+
+    function isValidGeofenceSetting(data) {
+      return data.keys().hasAll(['enabled', 'campusName', 'latitude', 'longitude', 'radiusMeters', 'rollingPinEnabled'])
+        && data.keys().hasOnly(['enabled', 'campusName', 'latitude', 'longitude', 'radiusMeters', 'rollingPinEnabled', 'updatedAt', 'updatedBy'])
+        && data.enabled is bool
+        && data.campusName is string && data.campusName.size() > 0 && data.campusName.size() <= 120
+        && data.latitude is number && data.latitude >= -90 && data.latitude <= 90
+        && data.longitude is number && data.longitude >= -180 && data.longitude <= 180
+        && data.radiusMeters is number && data.radiusMeters >= 0 && data.radiusMeters <= 50000
+        && data.rollingPinEnabled is bool
+        && (!('updatedAt' in data) || data.updatedAt == null || (data.updatedAt is string && data.updatedAt.size() <= 60))
+        && (!('updatedBy' in data) || data.updatedBy == null || (data.updatedBy is string && data.updatedBy.size() <= 120));
+    }
+
+    function isValidSystemSetting(data, settingId) {
+      return (settingId == 'geofence' && isValidGeofenceSetting(data))
+        || (settingId == 'autoLogging' && data.keys().hasOnly([
+          'autoLogBiometricScanSuccess',
+          'autoLogBiometricScanFailure',
+          'autoLogSessionDrafts',
+          'autoLogFinalizedSessions',
+          'autoFinalizeOnClassEnd',
+          'autoFinalizeGracePeriodMinutes',
+          'autoMarkAbsentOnFinalize',
+          'autoFlagLateArrivals',
+          'lateThresholdMinutes',
+          'autoAlertAttendanceDeficit',
+          'autoLogAuthLogins',
+          'autoLogRoleChanges',
+          'autoLogRosterModifications',
+          'autoLogTimetableChanges',
+          'autoLogReportExports',
+          'autoLogOfflineSync',
+          'logRetentionDays',
+          'autoPruneOldLogs',
+          'realtimeCloudSync'
+        ]) && data.size() > 0);
+    }
+
+    // Connection Health Test Doc (Single doc read only, no listing)
     match /test/{testId} {
-      allow read: if true;
-      allow write: if false;
+      allow get: if testId == 'connection';
+      allow list, write: if false;
+    }
+
+    // Admins Registry (Immutable from client SDKs)
+    match /admins/{adminId} {
+      allow read, write: if false;
     }
 
     // User Profiles
     match /users/{userId} {
-      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow get: if isVerifiedUser() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
       allow list: if isAdmin();
-      allow create: if isSignedIn() && request.auth.uid == userId && isValidId(userId);
-      allow update: if isSignedIn() && (request.auth.uid == userId || isAdmin()) && isValidId(userId);
-      allow delete: if isAdmin();
-    }
-
-    // Students Collection
-    match /students/{studentId} {
-      allow read: if true;
-      allow create: if isValidId(studentId)
-        && incoming().name is string && incoming().name.size() > 0 && incoming().name.size() <= 150
-        && incoming().indexNumber is string && incoming().indexNumber.size() > 0 && incoming().indexNumber.size() <= 50;
-      allow update: if isValidId(studentId);
-      allow delete: if true;
-    }
-
-    // Courses Collection
-    match /courses/{courseId} {
-      allow read: if true;
-      allow create: if isValidId(courseId)
-        && incoming().code is string && incoming().code.size() > 0 && incoming().code.size() <= 30
-        && incoming().title is string && incoming().title.size() > 0 && incoming().title.size() <= 200;
-      allow update: if isValidId(courseId);
-      allow delete: if true;
-    }
-
-    // Timetable Slots Collection
-    match /timetable/{slotId} {
-      allow read: if true;
-      allow create: if isValidId(slotId)
-        && incoming().dayOfWeek is number && incoming().dayOfWeek >= 1 && incoming().dayOfWeek <= 6;
-      allow update: if isValidId(slotId);
-      allow delete: if true;
-    }
-
-    // Attendance Records Collection
-    match /attendance/{attendanceId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && isValidId(attendanceId)
-        && incoming().date is string && incoming().courseId is string;
-      // Protected updates: finalized records can only be altered/unlocked by admins or when unlocking
-      allow update: if isSignedIn() && isValidId(attendanceId) && (
+      allow create: if isVerifiedUser() && request.auth.uid == userId && isValidId(userId) && isValidUserProfile(incoming()) && (isAdmin() || incoming().role != 'hod');
+      allow update: if isVerifiedUser() && isValidId(userId) && isValidUserProfile(incoming()) && (
         isAdmin() ||
-        resource.data.isFinalized == false ||
-        incoming().diff(resource.data).affectedKeys().hasOnly(['isFinalized'])
+        (request.auth.uid == userId && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'department']))
       );
-      allow delete: if isAdmin();
+      allow delete: if isAdmin() && isValidId(userId);
     }
 
-    // Audit Logs Collection: Append-Only Immutable Records
+    // Students Collection (Strictly Authorized Personnel Only - ZERO public access)
+    match /students/{studentId} {
+      allow get: if isAuthorizedStaff() && isValidId(studentId);
+      allow list: if isAuthorizedStaff();
+      allow create: if isAuthorizedStaff() && isValidId(studentId) && isValidStudent(incoming());
+      allow update: if isAuthorizedStaff() && isValidId(studentId) && isValidStudent(incoming());
+      allow delete: if isAuthorizedStaff() && isValidId(studentId);
+    }
+
+    // Courses Collection (Strictly Authorized Personnel Only - ZERO public access)
+    match /courses/{courseId} {
+      allow get: if isAuthorizedStaff() && isValidId(courseId);
+      allow list: if isAuthorizedStaff();
+      allow create: if isAuthorizedStaff() && isValidId(courseId) && isValidCourse(incoming());
+      allow update: if isAuthorizedStaff() && isValidId(courseId) && isValidCourse(incoming());
+      allow delete: if isAuthorizedStaff() && isValidId(courseId);
+    }
+
+    // Timetable Slots Collection (Strictly Authorized Personnel Only - ZERO public access)
+    match /timetable/{slotId} {
+      allow get: if isAuthorizedStaff() && isValidId(slotId);
+      allow list: if isAuthorizedStaff();
+      allow create: if isAuthorizedStaff() && isValidId(slotId) && isValidTimetableSlot(incoming());
+      allow update: if isAuthorizedStaff() && isValidId(slotId) && isValidTimetableSlot(incoming());
+      allow delete: if isAuthorizedStaff() && isValidId(slotId);
+    }
+
+    // Attendance Records Collection (Strictly Authorized Personnel Only)
+    match /attendance/{attendanceId} {
+      allow get: if isAuthorizedStaff() && isValidId(attendanceId);
+      allow list: if isAuthorizedStaff();
+      allow create: if isAuthorizedStaff() && isValidId(attendanceId) && isValidAttendance(incoming());
+      allow update: if isAuthorizedStaff() && isValidId(attendanceId) && isValidAttendance(incoming()) && (
+        isAdmin() ||
+        existing().isFinalized == false ||
+        incoming().diff(existing()).affectedKeys().hasOnly(['isFinalized'])
+      );
+      allow delete: if isAdmin() && isValidId(attendanceId);
+    }
+
+    // Audit Logs Collection: Append-Only by Authorized Staff, Immutable
     match /auditLogs/{logId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && isValidId(logId)
-        && incoming().action is string && incoming().action.size() <= 100
-        && incoming().user is string;
+      allow get: if isAuthorizedStaff() && isValidId(logId);
+      allow list: if isAuthorizedStaff();
+      allow create: if isAuthorizedStaff() && isValidId(logId) && isValidAuditLog(incoming());
       allow update: if false;
-      allow delete: if isAdmin();
+      allow delete: if isAdmin() && isValidId(logId);
     }
 
-    // Authorized Personnel Registry (HOD, Lecturers, Class Reps)
+    // Authorized Personnel Registry (HOD manages all; Lecturers manage Class Reps only)
     match /authorizedUsers/{userId} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn() && isValidId(userId);
+      allow get: if isAuthorizedStaff() && isValidId(userId);
+      allow list: if isAuthorizedStaff();
+      allow create: if isValidId(userId) && isValidAuthorizedUser(incoming()) && (
+        isAdmin() ||
+        (isLecturerOrAdmin() && incoming().role == 'class_rep')
+      );
+      allow update: if isAdmin() && isValidId(userId) && isValidAuthorizedUser(incoming());
+      allow delete: if isValidId(userId) && existing().email.lower() != "jonesdarko345@gmail.com" && (
+        isAdmin() ||
+        (isLecturerOrAdmin() && existing().role == 'class_rep')
+      );
     }
 
-    // System Settings (Auto-Logging & Attendance Governance Policies)
+    // Email-Indexed Authorization Lookup (Verified users may check ONLY their own email doc)
+    match /authorizedEmails/{email} {
+      allow get: if isValidEmailDocId(email) && email == email.lower() && (
+        (isVerifiedUser() && email == userEmailLower()) ||
+        isAdmin()
+      );
+      allow list: if isAuthorizedStaff();
+      allow create: if isValidEmailDocId(email) && email == email.lower() && isValidAuthorizedEmail(incoming()) && incoming().email.lower() == email && (
+        isAdmin() ||
+        (isLecturerOrAdmin() && incoming().role == 'class_rep')
+      );
+      allow update: if isAdmin() && isValidEmailDocId(email) && email == email.lower() && isValidAuthorizedEmail(incoming()) && incoming().email.lower() == email;
+      allow delete: if isValidEmailDocId(email) && email == email.lower() && email != "jonesdarko345@gmail.com" && (
+        isAdmin() ||
+        (isLecturerOrAdmin() && existing().role == 'class_rep')
+      );
+    }
+
+    // System Settings (Authorized Personnel Read, Admin/Lecturer Write)
     match /systemSettings/{settingId} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn() && isValidId(settingId);
+      allow get: if isAuthorizedStaff() && isValidId(settingId);
+      allow list: if isAuthorizedStaff();
+      allow create, update: if isLecturerOrAdmin() && isValidId(settingId) && isValidSystemSetting(incoming(), settingId);
+      allow delete: if isAdmin() && isValidId(settingId);
+    }
+
+    // Student QR Check-In Queue (Isolated by submitterUid, processed by authorized staff)
+    match /qrCheckIns/{ticketId} {
+      allow get: if isValidId(ticketId) && (
+        isAuthorizedStaff() ||
+        (isSignedIn() && existing().submitterUid == request.auth.uid)
+      );
+      allow list: if isAuthorizedStaff();
+      allow create: if isSignedIn() && isValidId(ticketId) && isValidQrCheckInCreate(incoming());
+      allow update: if isAuthorizedStaff() && isValidId(ticketId) && isValidQrCheckInUpdate(incoming());
+      allow delete: if isAdmin() && isValidId(ticketId);
     }
   }
 }
