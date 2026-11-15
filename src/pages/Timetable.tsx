@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { Course, TimetableSlot } from '../types';
 import {
@@ -7,6 +7,7 @@ import {
   Clock,
   MapPin,
   Trash2,
+  Lock,
   BookOpen,
   Calendar,
   Layers,
@@ -78,8 +79,12 @@ export const Timetable: React.FC = () => {
     updateTimetableSlot,
     removeTimetableSlot,
     clearAllTimetableSlots,
-    assignCourseWithSchedule
+    assignCourseWithSchedule,
+    verifiedRole,
+    isLecturerCourseScoped
   } = useApp();
+
+  const isHod = verifiedRole === 'hod';
 
   const [activeTab, setActiveTab] = useState<'schedule' | 'courses'>('schedule');
   const [includeSaturday, setIncludeSaturday] = useState<boolean>(false);
@@ -133,12 +138,28 @@ export const Timetable: React.FC = () => {
   // Confirmation Modals
   const [showClearConfirm, setShowClearConfirm] = useState<'schedule' | 'courses' | null>(null);
 
+  const anyModalOpen = showAssignModal || Boolean(editingSlot) || Boolean(editingCourse) || Boolean(showClearConfirm);
+  useEffect(() => {
+    if (!anyModalOpen) return;
+    const html = document.documentElement;
+    const body = document.body;
+    const prevHtmlOverflow = html.style.overflow;
+    const prevBodyOverflow = body.style.overflow;
+    html.style.overflow = 'hidden';
+    body.style.overflow = 'hidden';
+    return () => {
+      html.style.overflow = prevHtmlOverflow;
+      body.style.overflow = prevBodyOverflow;
+    };
+  }, [anyModalOpen]);
+
   // Open Assign Modal with pre-selected day
   const openAssignModalForDay = (dayId: number) => {
+    if (isLecturerCourseScoped && courses.length === 0) return;
     setSelectedDays([dayId]);
-    if (courses.length > 0) {
+    if (courses.length > 0 || !isHod) {
       setAssignMode('existing');
-      setSelectedCourseId(courses[0].id);
+      if (courses.length > 0) setSelectedCourseId(courses[0].id);
     } else {
       setAssignMode('new');
     }
@@ -317,38 +338,49 @@ export const Timetable: React.FC = () => {
             </button>
           </div>
 
-          <button
-            id="sync-official-l200-btn"
-            onClick={handleSyncL200}
-            disabled={isLoadingL200}
-            className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white dark:bg-teal-700 dark:hover:bg-teal-600 text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-            title="Load the official UENR Level 200 Stream A lecture and lab timetable"
-          >
-            {isLoadingL200 ? (
-              <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#8dc63f]" />
-            ) : (
-              <Sparkles className="w-3.5 h-3.5 text-[#8dc63f] dark:text-emerald-300" />
-            )}
-            <span>{isLoadingL200 ? 'Syncing...' : 'Sync L200 IT-A Timetable'}</span>
-          </button>
+          {isLecturerCourseScoped && (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-teal-50 dark:bg-teal-950/60 text-[#007c82] dark:text-teal-300 border border-teal-200 dark:border-teal-800 text-xs font-bold">
+              <Lock className="w-3.5 h-3.5 shrink-0" />
+              <span>Lecturer View · Scoped to Assigned Courses</span>
+            </span>
+          )}
 
-          <button
-            id="assign-course-study-days-btn"
-            onClick={() => {
-              if (courses.length > 0) {
-                setAssignMode('existing');
-                setSelectedCourseId(courses[0].id);
-              } else {
-                setAssignMode('new');
-              }
-              setSelectedDays([1]);
-              setShowAssignModal(true);
-            }}
-            className="px-4 py-2 rounded-xl bg-[#007c82] hover:bg-[#00666b] text-white text-xs font-bold transition-colors shadow-sm flex items-center gap-1.5 cursor-pointer"
-          >
-            <Plus className="w-4 h-4" />
-            Assign Course & Study Days
-          </button>
+          {isHod && (
+            <button
+              id="sync-official-l200-btn"
+              onClick={handleSyncL200}
+              disabled={isLoadingL200}
+              className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white dark:bg-teal-700 dark:hover:bg-teal-600 text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              title="Load the official UENR Level 200 Stream A lecture and lab timetable"
+            >
+              {isLoadingL200 ? (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#8dc63f]" />
+              ) : (
+                <Sparkles className="w-3.5 h-3.5 text-[#8dc63f] dark:text-emerald-300" />
+              )}
+              <span>{isLoadingL200 ? 'Syncing...' : 'Sync L200 IT-A Timetable'}</span>
+            </button>
+          )}
+
+          {(isHod || courses.length > 0) && (
+            <button
+              id="assign-course-study-days-btn"
+              onClick={() => {
+                if (courses.length > 0 || !isHod) {
+                  setAssignMode('existing');
+                  if (courses.length > 0) setSelectedCourseId(courses[0].id);
+                } else {
+                  setAssignMode('new');
+                }
+                setSelectedDays([1]);
+                setShowAssignModal(true);
+              }}
+              className="px-4 py-2 rounded-xl bg-[#007c82] hover:bg-[#00666b] text-white text-xs font-bold transition-colors shadow-sm flex items-center gap-1.5 cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              {isHod ? 'Assign Course & Study Days' : 'Schedule Study Days'}
+            </button>
+          )}
         </div>
       </div>
 
@@ -592,7 +624,7 @@ export const Timetable: React.FC = () => {
                 <span>Include Saturday</span>
               </label>
 
-              {timetable.length > 0 && (
+              {isHod && timetable.length > 0 && (
                 <button
                   onClick={() => setShowClearConfirm('schedule')}
                   className="text-xs text-rose-600 hover:text-rose-700 font-semibold flex items-center gap-1 cursor-pointer"
@@ -606,29 +638,43 @@ export const Timetable: React.FC = () => {
 
           {/* Empty State when no timetable slots exist */}
           {timetable.length === 0 ? (
-            <div className="bg-white border border-dashed border-slate-300 rounded-3xl p-10 text-center space-y-4 max-w-xl mx-auto shadow-xs">
-              <div className="w-14 h-14 rounded-2xl bg-teal-50 text-[#007c82] flex items-center justify-center mx-auto shadow-xs">
+            <div className="bg-white dark:bg-slate-900 border border-dashed border-slate-300 dark:border-slate-700 rounded-3xl p-10 text-center space-y-4 max-w-xl mx-auto shadow-xs">
+              <div className="w-14 h-14 rounded-2xl bg-teal-50 dark:bg-teal-950/50 text-[#007c82] dark:text-teal-400 flex items-center justify-center mx-auto shadow-xs">
                 <CalendarDays className="w-7 h-7" />
               </div>
-              <div>
-                <h3 className="text-lg font-bold text-slate-900">Your Timetable is Empty</h3>
-                <p className="text-xs sm:text-sm text-slate-500 mt-1 max-w-md mx-auto">
-                  You have full freedom to assign your own courses, course codes, lecturers, and specify which days of the week they are studied.
-                </p>
-              </div>
-              <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
-                <button
-                  onClick={() => {
-                    setAssignMode('new');
-                    setSelectedDays([1]);
-                    setShowAssignModal(true);
-                  }}
-                  className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-[#007c82] hover:bg-[#00666b] text-white text-xs font-bold transition-colors shadow-sm flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  <Plus className="w-4 h-4" />
-                  Assign Your First Course & Study Days
-                </button>
-              </div>
+              {isLecturerCourseScoped && courses.length === 0 ? (
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">No Courses Assigned Yet</h3>
+                  <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1 max-w-md mx-auto">
+                    Your lecturer account is currently not linked to any courses. Please contact your Head of Department (HOD) to assign courses to your account.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <h3 className="text-lg font-bold text-slate-900 dark:text-white">Your Timetable is Empty</h3>
+                    <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1 max-w-md mx-auto">
+                      {isLecturerCourseScoped
+                        ? 'Schedule lecture days and venues for the courses assigned to your account.'
+                        : 'You have full freedom to assign your own courses, course codes, lecturers, and specify which days of the week they are studied.'}
+                    </p>
+                  </div>
+                  <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+                    <button
+                      onClick={() => {
+                        setAssignMode(isHod && courses.length === 0 ? 'new' : 'existing');
+                        if (courses.length > 0) setSelectedCourseId(courses[0].id);
+                        setSelectedDays([1]);
+                        setShowAssignModal(true);
+                      }}
+                      className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-[#007c82] hover:bg-[#00666b] text-white text-xs font-bold transition-colors shadow-sm flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <Plus className="w-4 h-4" />
+                      {isHod ? 'Assign Your First Course & Study Days' : 'Schedule Study Days for Assigned Course'}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           ) : (
             /* Multi-Day Column Grid */
@@ -786,7 +832,7 @@ export const Timetable: React.FC = () => {
               </span>
             </div>
 
-            {courses.length > 0 && (
+            {isHod && courses.length > 0 && (
               <button
                 onClick={() => setShowClearConfirm('courses')}
                 className="text-xs text-rose-600 dark:text-rose-400 hover:text-rose-700 font-semibold flex items-center gap-1 cursor-pointer"
@@ -802,23 +848,34 @@ export const Timetable: React.FC = () => {
               <div className="w-14 h-14 rounded-2xl bg-teal-50 dark:bg-teal-950/40 text-[#007c82] dark:text-teal-400 flex items-center justify-center mx-auto shadow-xs">
                 <BookOpen className="w-7 h-7" />
               </div>
-              <div>
-                <h3 className="text-lg font-bold text-slate-900 dark:text-white">No Courses Registered</h3>
-                <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1 max-w-md mx-auto">
-                  Add your custom course names and assign which days they are studied.
-                </p>
-              </div>
-              <button
-                onClick={() => {
-                  setAssignMode('new');
-                  setSelectedDays([1]);
-                  setShowAssignModal(true);
-                }}
-                className="px-5 py-2.5 rounded-xl bg-[#007c82] hover:bg-[#00666b] text-white text-xs font-bold transition-colors shadow-sm inline-flex items-center gap-2 cursor-pointer"
-              >
-                <Plus className="w-4 h-4" />
-                Add Your First Course
-              </button>
+              {isLecturerCourseScoped ? (
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">No Courses Assigned Yet</h3>
+                  <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1 max-w-md mx-auto">
+                    Only the Head of Department (HOD) can create courses and assign them to your lecturer account.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <h3 className="text-lg font-bold text-slate-900 dark:text-white">No Courses Registered</h3>
+                    <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1 max-w-md mx-auto">
+                      Add your custom course names and assign which days they are studied.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setAssignMode('new');
+                      setSelectedDays([1]);
+                      setShowAssignModal(true);
+                    }}
+                    className="px-5 py-2.5 rounded-xl bg-[#007c82] hover:bg-[#00666b] text-white text-xs font-bold transition-colors shadow-sm inline-flex items-center gap-2 cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Add Your First Course
+                  </button>
+                </>
+              )}
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -838,28 +895,30 @@ export const Timetable: React.FC = () => {
                         <span className="text-xs font-black text-[#007c82] dark:text-teal-300 bg-teal-50 dark:bg-teal-950/60 px-2.5 py-1 rounded-lg border border-teal-100 dark:border-teal-900/50">
                           {course.code}
                         </span>
-                        <div className="flex items-center gap-1">
-                          <button
-                            onClick={() => {
-                              setEditingCourse(course);
-                              setEditCourseCode(course.code);
-                              setEditCourseTitle(course.title);
-                              setEditCourseCredits(course.creditHours);
-                              setEditCourseLecturer(course.lecturer);
-                            }}
-                            className="p-1 text-slate-400 hover:text-[#007c82] dark:hover:text-teal-400 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-                            title="Edit course"
-                          >
-                            <Edit2 className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => removeCourse(course.id)}
-                            className="p-1 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-                            title="Delete course"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
+                        {isHod && (
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => {
+                                setEditingCourse(course);
+                                setEditCourseCode(course.code);
+                                setEditCourseTitle(course.title);
+                                setEditCourseCredits(course.creditHours);
+                                setEditCourseLecturer(course.lecturer);
+                              }}
+                              className="p-1 text-slate-400 hover:text-[#007c82] dark:hover:text-teal-400 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                              title="Edit course"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => removeCourse(course.id)}
+                              className="p-1 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                              title="Delete course"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
                       </div>
 
                       <h4 className="font-bold text-slate-900 dark:text-white text-sm mt-2 leading-tight">
@@ -933,8 +992,8 @@ export const Timetable: React.FC = () => {
               </button>
             </div>
 
-            {/* Course Mode Selector */}
-            {courses.length > 0 && (
+            {/* Course Mode Selector (HOD only can create brand new courses) */}
+            {isHod && courses.length > 0 && (
               <div className="flex rounded-xl bg-slate-100 p-1 border border-slate-200">
                 <button
                   type="button"
@@ -962,8 +1021,8 @@ export const Timetable: React.FC = () => {
             )}
 
             <form onSubmit={handleAssignSubmit} className="space-y-4">
-              {/* If choosing existing course */}
-              {assignMode === 'existing' && courses.length > 0 ? (
+              {/* If choosing existing course or scoped lecturer */}
+              {(assignMode === 'existing' || !isHod) && courses.length > 0 ? (
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
                     Select Course

@@ -29,8 +29,11 @@ import {
   GraduationCap,
   Building2,
   Landmark,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Ban,
+  RotateCcw
 } from 'lucide-react';
+import { CancelClassModal } from './CancelClassModal';
 
 const WEEKDAYS = [
   { id: 1, name: 'Monday', short: 'Mon' },
@@ -55,8 +58,15 @@ export const DashboardTop: React.FC = () => {
     loginWithGoogle,
     setActiveTab,
     launchAttendanceSession,
-    openDatabaseTab
+    openDatabaseTab,
+    isLecturerCourseScoped,
+    verifiedRole,
+    cancelClassSession,
+    restoreCancelledClass,
+    getCancellationForSession
   } = useApp();
+
+  const canManageCancellations = (verifiedRole || currentUser.role) !== 'class_rep';
 
   // Live ticking clock
   const [currentTime, setCurrentTime] = useState<Date>(new Date());
@@ -143,6 +153,11 @@ export const DashboardTop: React.FC = () => {
     'present' | 'absent' | 'search' | 'biometrics' | 'schedule' | 'campus' | null
   >(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [cancelTarget, setCancelTarget] = useState<{
+    course: Course;
+    date: string;
+    slot: TimetableSlot;
+  } | null>(null);
   const modalScrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -278,6 +293,15 @@ export const DashboardTop: React.FC = () => {
 
   const primarySlotCourse = activeOrUpcomingSlot ? courses.find((c) => c.id === activeOrUpcomingSlot.courseId) : undefined;
   const primarySlotStatus = activeOrUpcomingSlot ? getCurrentSlotStatus(activeOrUpcomingSlot) : null;
+  const primarySlotCancellation =
+    activeOrUpcomingSlot && primarySlotCourse
+      ? getCancellationForSession({
+          date: todayStr,
+          courseId: activeOrUpcomingSlot.courseId,
+          slotId: activeOrUpcomingSlot.id,
+          stream: activeOrUpcomingSlot.stream
+        })
+      : undefined;
 
   return (
     <div className="space-y-6">
@@ -387,13 +411,22 @@ export const DashboardTop: React.FC = () => {
                   </span>
                   {activeOrUpcomingSlot && (
                     <span
-                      className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full ${
-                        primarySlotStatus?.status === 'in-progress'
+                      className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full inline-flex items-center gap-1 ${
+                        primarySlotCancellation
+                          ? 'bg-rose-500/90 text-white'
+                          : primarySlotStatus?.status === 'in-progress'
                           ? 'bg-emerald-400 text-[#003b5c] animate-pulse'
                           : 'bg-blue-400/30 text-blue-200'
                       }`}
                     >
-                      {primarySlotStatus?.label}
+                      {primarySlotCancellation ? (
+                        <>
+                          <Ban className="w-3 h-3" />
+                          <span>Class Cancelled</span>
+                        </>
+                      ) : (
+                        primarySlotStatus?.label
+                      )}
                     </span>
                   )}
                 </div>
@@ -431,14 +464,31 @@ export const DashboardTop: React.FC = () => {
                         </>
                       )}
                     </div>
+                    {primarySlotCancellation && (
+                      <div className="mt-2 inline-flex items-center gap-1.5 text-xs bg-rose-950/70 text-rose-200 border border-rose-400/40 px-2.5 py-1 rounded-lg">
+                        <Ban className="w-3.5 h-3.5 text-rose-300 shrink-0" />
+                        <span>
+                          <strong>Cancelled today:</strong> {primarySlotCancellation.reason}
+                          {primarySlotCancellation.makeupNote ? ` · Makeup: ${primarySlotCancellation.makeupNote}` : ''}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div>
                     <h2 className="text-lg sm:text-xl font-black text-white">
-                      {isWeekend ? 'Weekend: No Timetable Lectures Today' : 'No Timetable Lectures Scheduled Today'}
+                      {isLecturerCourseScoped && courses.length === 0
+                        ? 'No Courses Assigned to Your Account Yet'
+                        : isWeekend
+                        ? 'Weekend: No Timetable Lectures Today'
+                        : 'No Timetable Lectures Scheduled Today'}
                     </h2>
                     <p className="text-xs sm:text-sm text-slate-200">
-                      Lectures and assigned lecturers will only appear when you explicitly create and assign them in Timetable.
+                      {isLecturerCourseScoped && courses.length === 0
+                        ? 'Your portal shows only courses assigned to you by the Head of Department (HOD). Please contact your HOD to assign your courses.'
+                        : isLecturerCourseScoped
+                        ? `Scoped to your assigned course${courses.length === 1 ? '' : 's'} (${courses.map((c) => c.code).join(', ')}). Check the weekly schedule below or start attendance.`
+                        : 'Lectures and assigned lecturers will only appear when you explicitly create and assign them in Timetable.'}
                     </p>
                   </div>
                 )}
@@ -466,32 +516,71 @@ export const DashboardTop: React.FC = () => {
                   </>
                 ) : (
                   <>
-                    <button
-                      onClick={() => {
-                        if (activeOrUpcomingSlot) {
-                          launchAttendanceSession({
-                            courseId: activeOrUpcomingSlot.courseId,
-                            stream: activeOrUpcomingSlot.stream,
-                            level: inferLevelFromCourseCode(primarySlotCourse?.code) || undefined,
-                            slotId: activeOrUpcomingSlot.id,
-                            date: todayStr
-                          });
-                        } else if (activeCourseId) {
-                          launchAttendanceSession({
-                            courseId: activeCourseId,
-                            level: inferLevelFromCourseCode(activeCourse?.code) || undefined,
-                            date: todayStr
-                          });
-                        } else {
-                          launchAttendanceSession();
-                        }
-                      }}
-                      className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#8dc63f] to-[#7bb033] hover:from-[#96d244] hover:to-[#85bd37] text-[#003b5c] font-black text-xs sm:text-sm shadow-md hover:shadow-lg transition-all active:scale-95 cursor-pointer ring-2 ring-emerald-400/50"
-                    >
-                      <CalendarCheck className="w-4 h-4" />
-                      <span>{currentUser.role === 'class_rep' ? 'Assist Roll Call' : 'Start Attendance Session'}</span>
-                      <ArrowRight className="w-4 h-4 ml-0.5" />
-                    </button>
+                    {primarySlotCancellation ? (
+                      canManageCancellations ? (
+                        <button
+                          onClick={() => restoreCancelledClass(primarySlotCancellation.id)}
+                          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs sm:text-sm shadow-md transition-all active:scale-95 cursor-pointer"
+                        >
+                          <RotateCcw className="w-4 h-4" />
+                          <span>Restore Cancelled Class</span>
+                        </button>
+                      ) : (
+                        <button
+                          disabled
+                          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-rose-950/70 text-rose-200 border border-rose-400/40 font-black text-xs sm:text-sm cursor-not-allowed opacity-85"
+                        >
+                          <Ban className="w-4 h-4" />
+                          <span>Class Cancelled Today</span>
+                        </button>
+                      )
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => {
+                            if (activeOrUpcomingSlot) {
+                              launchAttendanceSession({
+                                courseId: activeOrUpcomingSlot.courseId,
+                                stream: activeOrUpcomingSlot.stream,
+                                level: inferLevelFromCourseCode(primarySlotCourse?.code) || undefined,
+                                slotId: activeOrUpcomingSlot.id,
+                                date: todayStr
+                              });
+                            } else if (activeCourseId) {
+                              launchAttendanceSession({
+                                courseId: activeCourseId,
+                                level: inferLevelFromCourseCode(activeCourse?.code) || undefined,
+                                date: todayStr
+                              });
+                            } else {
+                              launchAttendanceSession();
+                            }
+                          }}
+                          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#8dc63f] to-[#7bb033] hover:from-[#96d244] hover:to-[#85bd37] text-[#003b5c] font-black text-xs sm:text-sm shadow-md hover:shadow-lg transition-all active:scale-95 cursor-pointer ring-2 ring-emerald-400/50"
+                        >
+                          <CalendarCheck className="w-4 h-4" />
+                          <span>{currentUser.role === 'class_rep' ? 'Assist Roll Call' : 'Start Attendance Session'}</span>
+                          <ArrowRight className="w-4 h-4 ml-0.5" />
+                        </button>
+
+                        {activeOrUpcomingSlot && primarySlotCourse && canManageCancellations && (
+                          <button
+                            onClick={() =>
+                              setCancelTarget({
+                                course: primarySlotCourse,
+                                date: todayStr,
+                                slot: activeOrUpcomingSlot
+                              })
+                            }
+                            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/35 text-rose-100 text-xs sm:text-sm font-semibold backdrop-blur-md border border-rose-300/30 transition-all cursor-pointer"
+                            title="Cancel today's lecture session"
+                          >
+                            <Ban className="w-4 h-4 text-rose-300" />
+                            <span className="hidden sm:inline">Cancel Class</span>
+                          </button>
+                        )}
+                      </>
+                    )}
 
                     <button
                       onClick={() => setModalType('search')}
@@ -572,16 +661,24 @@ export const DashboardTop: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 text-amber-300 shrink-0" />
                   <span>
-                    No classes scheduled for{' '}
-                    <strong>{WEEKDAYS.find((d) => d.id === previewDay)?.name}</strong>.
+                    {isLecturerCourseScoped && courses.length === 0
+                      ? 'No courses assigned to your account yet.'
+                      : (
+                        <>
+                          No classes scheduled for{' '}
+                          <strong>{WEEKDAYS.find((d) => d.id === previewDay)?.name}</strong>.
+                        </>
+                      )}
                   </span>
                 </div>
-                <button
-                  onClick={() => setActiveTab('timetable')}
-                  className="text-emerald-300 hover:text-white font-bold underline text-xs cursor-pointer"
-                >
-                  + Assign Courses in Timetable
-                </button>
+                {!(isLecturerCourseScoped && courses.length === 0) && (
+                  <button
+                    onClick={() => setActiveTab('timetable')}
+                    className="text-emerald-300 hover:text-white font-bold underline text-xs cursor-pointer"
+                  >
+                    {isLecturerCourseScoped ? '+ Schedule Assigned Course' : '+ Assign Courses in Timetable'}
+                  </button>
+                )}
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
@@ -590,6 +687,13 @@ export const DashboardTop: React.FC = () => {
                   const statusMeta = getCurrentSlotStatus(slot);
                   const inferredLevel = inferLevelFromCourseCode(course?.code);
                   const cohortTag = [inferredLevel, slot.stream].filter(Boolean).join(' · ');
+                  const slotDate = resolveDateForWeekday(slot.dayOfWeek, currentTime);
+                  const cancellation = getCancellationForSession({
+                    date: slotDate,
+                    courseId: slot.courseId,
+                    slotId: slot.id,
+                    stream: slot.stream
+                  });
 
                   return (
                     <div
@@ -600,10 +704,14 @@ export const DashboardTop: React.FC = () => {
                           stream: slot.stream,
                           level: inferredLevel || undefined,
                           slotId: slot.id,
-                          date: resolveDateForWeekday(slot.dayOfWeek, currentTime)
+                          date: slotDate
                         })
                       }
-                      className="group bg-white/10 hover:bg-white/15 transition-all p-3 rounded-xl border border-white/15 cursor-pointer flex flex-col justify-between space-y-2 hover:border-[#8dc63f]/50"
+                      className={`group transition-all p-3 rounded-xl border cursor-pointer flex flex-col justify-between space-y-2 ${
+                        cancellation
+                          ? 'bg-rose-950/35 hover:bg-rose-950/50 border-rose-400/35 hover:border-rose-300/60'
+                          : 'bg-white/10 hover:bg-white/15 border-white/15 hover:border-[#8dc63f]/50'
+                      }`}
                       title={`Click to open attendance for ${course?.code || 'course'}${cohortTag ? ` (${cohortTag})` : ''}`}
                     >
                       <div className="flex items-start justify-between gap-2">
@@ -617,7 +725,12 @@ export const DashboardTop: React.FC = () => {
                             </span>
                           )}
                         </div>
-                        {previewDay === dayOfWeek ? (
+                        {cancellation ? (
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 bg-rose-500/85 text-white inline-flex items-center gap-1">
+                            <Ban className="w-2.5 h-2.5" />
+                            Cancelled
+                          </span>
+                        ) : previewDay === dayOfWeek ? (
                           <span
                             className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 ${
                               statusMeta.status === 'in-progress'
@@ -636,19 +749,55 @@ export const DashboardTop: React.FC = () => {
                         )}
                       </div>
 
-                      <div className="text-xs font-bold text-white line-clamp-1 group-hover:text-emerald-300 transition-colors">
-                        {course?.title || 'Lecture Session'}
+                      <div>
+                        <div className="text-xs font-bold text-white line-clamp-1 group-hover:text-emerald-300 transition-colors">
+                          {course?.title || 'Lecture Session'}
+                        </div>
+                        {cancellation && (
+                          <p className="text-[10px] text-rose-200/90 line-clamp-1 mt-0.5">
+                            {cancellation.reason}
+                          </p>
+                        )}
                       </div>
 
-                      <div className="flex items-center justify-between text-[11px] text-slate-300 pt-1 border-t border-white/10">
-                        <span className="flex items-center gap-1 font-mono text-emerald-200">
+                      <div className="flex items-center justify-between gap-2 text-[11px] text-slate-300 pt-1 border-t border-white/10">
+                        <span className="flex items-center gap-1 font-mono text-emerald-200 shrink-0">
                           <Clock className="w-3 h-3" />
                           {slot.startTime} – {slot.endTime}
                         </span>
-                        <span className="flex items-center gap-1 text-slate-300 truncate max-w-[120px]">
-                          <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
-                          <span className="truncate">{slot.venue}</span>
-                        </span>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="flex items-center gap-1 text-slate-300 truncate max-w-[100px]">
+                            <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
+                            <span className="truncate">{slot.venue}</span>
+                          </span>
+                          {canManageCancellations && course && (
+                            cancellation ? (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  restoreCancelledClass(cancellation.id);
+                                }}
+                                className="px-1.5 py-0.5 rounded bg-white/15 hover:bg-white/25 text-white text-[10px] font-bold cursor-pointer shrink-0"
+                                title="Restore this cancelled session"
+                              >
+                                Restore
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setCancelTarget({ course, date: slotDate, slot });
+                                }}
+                                className="px-1.5 py-0.5 rounded bg-rose-500/20 hover:bg-rose-500/40 text-rose-200 text-[10px] font-semibold cursor-pointer shrink-0 opacity-85 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
+                                title={`Cancel ${course.code} on ${slotDate}`}
+                              >
+                                Cancel
+                              </button>
+                            )
+                          )}
+                        </div>
                       </div>
                     </div>
                   );
@@ -1167,6 +1316,14 @@ export const DashboardTop: React.FC = () => {
                 previewDaySlots.map((slot) => {
                   const course = courses.find((c) => c.id === slot.courseId);
                   const inferredLevel = inferLevelFromCourseCode(course?.code);
+                  const slotDate = resolveDateForWeekday(slot.dayOfWeek, currentTime);
+                  const cancellation = getCancellationForSession({
+                    date: slotDate,
+                    courseId: slot.courseId,
+                    slotId: slot.id,
+                    stream: slot.stream
+                  });
+
                   return (
                     <div
                       key={slot.id}
@@ -1177,17 +1334,26 @@ export const DashboardTop: React.FC = () => {
                           stream: slot.stream,
                           level: inferredLevel || undefined,
                           slotId: slot.id,
-                          date: resolveDateForWeekday(slot.dayOfWeek, currentTime)
+                          date: slotDate
                         });
                       }}
-                      className="bg-slate-50 hover:bg-teal-50/60 p-3 rounded-xl border border-slate-200 hover:border-[#007c82]/50 flex items-center justify-between gap-3 cursor-pointer transition-colors"
+                      className={`p-3 rounded-xl border flex items-center justify-between gap-3 cursor-pointer transition-colors ${
+                        cancellation
+                          ? 'bg-rose-50 hover:bg-rose-100/70 border-rose-200'
+                          : 'bg-slate-50 hover:bg-teal-50/60 border-slate-200 hover:border-[#007c82]/50'
+                      }`}
                     >
-                      <div className="space-y-0.5">
+                      <div className="space-y-0.5 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="text-xs font-black text-[#007c82] bg-teal-50 px-2 py-0.5 rounded-md border border-teal-100">
                             {course?.code}
                           </span>
                           <span className="text-xs font-bold text-slate-900">{course?.title}</span>
+                          {cancellation && (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 border border-rose-200">
+                              Cancelled
+                            </span>
+                          )}
                           {(inferredLevel || slot.stream) && (
                             <span className="text-[10px] font-semibold text-slate-500">
                               {[inferredLevel, slot.stream].filter(Boolean).join(' · ')}
@@ -1202,13 +1368,47 @@ export const DashboardTop: React.FC = () => {
                             {slot.venue}
                           </span>
                         </div>
+                        {cancellation && (
+                          <div className="text-[11px] text-rose-700 font-medium truncate">
+                            Reason: {cancellation.reason}
+                          </div>
+                        )}
                       </div>
 
-                      <div className="text-right shrink-0">
+                      <div className="text-right shrink-0 space-y-1">
                         <span className="text-xs font-bold text-slate-800 font-mono block">
                           {slot.startTime} – {slot.endTime}
                         </span>
-                        <span className="text-[10px] font-bold text-[#007c82]">Take Attendance →</span>
+                        {canManageCancellations && course ? (
+                          cancellation ? (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                restoreCancelledClass(cancellation.id);
+                              }}
+                              className="text-[10px] font-bold text-rose-700 hover:underline cursor-pointer"
+                            >
+                              Restore Class
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setModalType(null);
+                                setCancelTarget({ course, date: slotDate, slot });
+                              }}
+                              className="text-[10px] font-bold text-rose-600 hover:underline cursor-pointer"
+                            >
+                              Cancel Session
+                            </button>
+                          )
+                        ) : (
+                          <span className="text-[10px] font-bold text-[#007c82]">
+                            {cancellation ? 'View Notice →' : 'Take Attendance →'}
+                          </span>
+                        )}
                       </div>
                     </div>
                   );
@@ -1344,6 +1544,27 @@ export const DashboardTop: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Date-Specific Class Cancellation Modal */}
+      <CancelClassModal
+        isOpen={Boolean(cancelTarget)}
+        onClose={() => setCancelTarget(null)}
+        course={cancelTarget?.course || null}
+        date={cancelTarget?.date || todayStr}
+        slot={cancelTarget?.slot || null}
+        stream={cancelTarget?.slot.stream}
+        onConfirm={async ({ reason, makeupNote }) => {
+          if (!cancelTarget) return;
+          await cancelClassSession({
+            date: cancelTarget.date,
+            courseId: cancelTarget.course.id,
+            timetableSlotId: cancelTarget.slot.id,
+            stream: cancelTarget.slot.stream,
+            reason,
+            makeupNote
+          });
+        }}
+      />
 
     </div>
   );

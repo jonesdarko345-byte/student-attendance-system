@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { auth, db, silentSignInAnonymously } from '../lib/firebase';
-import { doc, setDoc, onSnapshot } from 'firebase/firestore';
+import { doc, setDoc, onSnapshot, enableNetwork } from 'firebase/firestore';
 import {
   CheckCircle2,
   AlertCircle,
@@ -23,6 +23,30 @@ import {
 } from '../utils/geofence';
 
 type LocationState = 'checking' | 'verified' | 'outside' | 'denied' | 'pin_unlocked' | 'bypassed' | 'error';
+
+function generateSecureHex(byteLength = 16): string {
+  if (typeof window !== 'undefined' && window.crypto?.getRandomValues) {
+    const arr = new Uint8Array(byteLength);
+    window.crypto.getRandomValues(arr);
+    return Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`.padEnd(byteLength * 2, '0').slice(0, byteLength * 2);
+}
+
+function getOrCreateGuestSessionId(): string {
+  const storageKey = 'uenr_qr_guest_session_id';
+  try {
+    const existing = localStorage.getItem(storageKey);
+    if (existing && /^[a-zA-Z0-9_-]{16,128}$/.test(existing)) {
+      return existing;
+    }
+    const created = `guest-${generateSecureHex(16)}`;
+    localStorage.setItem(storageKey, created);
+    return created;
+  } catch {
+    return `guest-${generateSecureHex(16)}`;
+  }
+}
 
 export const StudentCheckIn: React.FC = () => {
   const { courses, isAuthorized, checkInStudentWithIndex } = useApp();
@@ -280,21 +304,42 @@ export const StudentCheckIn: React.FC = () => {
           }
         );
       } else {
-        let user = auth.currentUser;
-        if (!user) {
-          user = await silentSignInAnonymously();
-        }
-        if (!user) {
-          throw new Error('Could not establish a secure check-in session. Please verify your internet connection and try again.');
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          throw new Error('You appear to be offline. Please check your mobile data or campus Wi-Fi and try again.');
         }
 
+        let submitterUid = auth.currentUser?.uid || '';
+        if (!submitterUid) {
+          let anonUnavailable = false;
+          try {
+            anonUnavailable = sessionStorage.getItem('uenr_anon_auth_unavailable') === '1';
+          } catch {}
+
+          if (!anonUnavailable) {
+            const anonUser = await silentSignInAnonymously();
+            if (anonUser?.uid) {
+              submitterUid = anonUser.uid;
+            } else {
+              try {
+                sessionStorage.setItem('uenr_anon_auth_unavailable', '1');
+              } catch {}
+            }
+          }
+        }
+
+        if (!submitterUid) {
+          submitterUid = getOrCreateGuestSessionId();
+        }
+
+        await enableNetwork(db).catch(() => {});
+
         const cleanIndex = indexNumber.trim().toUpperCase().slice(0, 30);
-        const ticketId = `chk-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const ticketId = `chk-${Date.now()}-${generateSecureHex(16)}`.slice(0, 64);
         const ticketRef = doc(db, 'qrCheckIns', ticketId);
 
         await setDoc(ticketRef, {
           id: ticketId,
-          submitterUid: user.uid,
+          submitterUid,
           indexNumber: cleanIndex,
           courseId: activeCourse.id.slice(0, 60),
           courseCode: (activeCourse.code || '').slice(0, 30),

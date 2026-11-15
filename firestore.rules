@@ -67,6 +67,29 @@ service cloud.firestore {
       );
     }
 
+    function isLecturer() {
+      return isVerifiedUser() &&
+        exists(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())) &&
+        get(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())).data.role == "lecturer";
+    }
+
+    function isClassRep() {
+      return isVerifiedUser() &&
+        exists(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())) &&
+        get(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())).data.role == "class_rep";
+    }
+
+    function lecturerHasCourse(courseId) {
+      return isLecturer() &&
+        ('assignedCourseIds' in get(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())).data) &&
+        get(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())).data.assignedCourseIds is list &&
+        courseId in get(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())).data.assignedCourseIds;
+    }
+
+    function canAccessCourse(courseId) {
+      return isAdmin() || isClassRep() || lecturerHasCourse(courseId);
+    }
+
     // Validation Helpers (Anti-Update-Gap & Schema Integrity)
     function isValidStudent(data) {
       return data.keys().hasAll(['id', 'name', 'indexNumber', 'program', 'level'])
@@ -120,6 +143,21 @@ service cloud.firestore {
         && (!('gpsVerifiedStudentIds' in data) || (data.gpsVerifiedStudentIds is list && data.gpsVerifiedStudentIds.size() <= 2000));
     }
 
+    function isValidCancelledClass(data) {
+      return data.keys().hasAll(['id', 'date', 'courseId', 'reason', 'cancelledBy', 'cancelledAt'])
+        && data.keys().hasOnly(['id', 'date', 'courseId', 'timetableSlotId', 'stream', 'reason', 'makeupNote', 'cancelledBy', 'cancelledByEmail', 'cancelledAt'])
+        && data.id is string && data.id.size() > 0 && data.id.size() <= 128
+        && data.date is string && data.date.size() > 0 && data.date.size() <= 20
+        && data.courseId is string && data.courseId.size() > 0 && data.courseId.size() <= 128
+        && (!('timetableSlotId' in data) || data.timetableSlotId == null || (data.timetableSlotId is string && data.timetableSlotId.size() <= 128))
+        && (!('stream' in data) || data.stream == null || (data.stream is string && data.stream.size() <= 40))
+        && data.reason is string && data.reason.size() > 0 && data.reason.size() <= 300
+        && (!('makeupNote' in data) || data.makeupNote == null || (data.makeupNote is string && data.makeupNote.size() <= 200))
+        && data.cancelledBy is string && data.cancelledBy.size() > 0 && data.cancelledBy.size() <= 120
+        && (!('cancelledByEmail' in data) || data.cancelledByEmail == null || (data.cancelledByEmail is string && data.cancelledByEmail.size() <= 120))
+        && data.cancelledAt is string && data.cancelledAt.size() > 0 && data.cancelledAt.size() <= 60;
+    }
+
     function isValidAuditLog(data) {
       return data.keys().hasAll(['id', 'action', 'details', 'timestamp', 'user', 'type'])
         && data.keys().hasOnly(['id', 'action', 'details', 'timestamp', 'user', 'type'])
@@ -133,13 +171,14 @@ service cloud.firestore {
 
     function isValidAuthorizedUser(data) {
       return data.keys().hasAll(['id', 'email', 'name', 'role'])
-        && data.keys().hasOnly(['id', 'email', 'name', 'role', 'department', 'courseAssigned', 'level', 'stream', 'addedAt'])
+        && data.keys().hasOnly(['id', 'email', 'name', 'role', 'department', 'courseAssigned', 'assignedCourseIds', 'level', 'stream', 'addedAt'])
         && data.id is string && data.id.size() > 0 && data.id.size() <= 128
         && data.email is string && data.email.size() >= 5 && data.email.size() <= 120
         && data.name is string && data.name.size() > 0 && data.name.size() <= 120
         && data.role in ['hod', 'lecturer', 'class_rep']
         && (!('department' in data) || data.department == null || (data.department is string && data.department.size() <= 150))
-        && (!('courseAssigned' in data) || data.courseAssigned == null || (data.courseAssigned is string && data.courseAssigned.size() <= 150))
+        && (!('courseAssigned' in data) || data.courseAssigned == null || (data.courseAssigned is string && data.courseAssigned.size() <= 200))
+        && (!('assignedCourseIds' in data) || (data.assignedCourseIds is list && data.assignedCourseIds.size() <= 50))
         && (!('level' in data) || data.level == null || (data.level is string && data.level.size() <= 40))
         && (!('stream' in data) || data.stream == null || (data.stream is string && data.stream.size() <= 40))
         && (!('addedAt' in data) || data.addedAt == null || (data.addedAt is string && data.addedAt.size() <= 40));
@@ -147,11 +186,13 @@ service cloud.firestore {
 
     function isValidAuthorizedEmail(data) {
       return data.keys().hasAll(['email', 'role'])
-        && data.keys().hasOnly(['email', 'name', 'role', 'department', 'addedAt'])
+        && data.keys().hasOnly(['email', 'name', 'role', 'department', 'courseAssigned', 'assignedCourseIds', 'addedAt'])
         && data.email is string && data.email.size() >= 5 && data.email.size() <= 120
         && data.role in ['hod', 'lecturer', 'class_rep']
         && (!('name' in data) || data.name == null || (data.name is string && data.name.size() <= 120))
         && (!('department' in data) || data.department == null || (data.department is string && data.department.size() <= 150))
+        && (!('courseAssigned' in data) || data.courseAssigned == null || (data.courseAssigned is string && data.courseAssigned.size() <= 200))
+        && (!('assignedCourseIds' in data) || (data.assignedCourseIds is list && data.assignedCourseIds.size() <= 50))
         && (!('addedAt' in data) || data.addedAt == null || (data.addedAt is string && data.addedAt.size() <= 40));
     }
 
@@ -166,11 +207,22 @@ service cloud.firestore {
         && (!('department' in data) || data.department == null || (data.department is string && data.department.size() <= 150));
     }
 
+    function isValidQrSubmitterUid(uid) {
+      return uid is string && uid.size() >= 16 && uid.size() <= 128 && uid.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidQrTicketId(ticketId) {
+      return isValidId(ticketId) && ticketId.size() >= 28 && ticketId.matches('^chk-[a-zA-Z0-9_\\-]+$');
+    }
+
     function isValidQrCheckInCreate(data) {
       return data.keys().hasAll(['id', 'submitterUid', 'indexNumber', 'courseId', 'date', 'status', 'createdAt'])
         && data.keys().hasOnly(['id', 'submitterUid', 'indexNumber', 'courseId', 'courseCode', 'courseTitle', 'date', 'stream', 'status', 'gpsVerified', 'distanceMeters', 'createdAt'])
         && data.id is string && data.id.size() > 0 && data.id.size() <= 128
-        && data.submitterUid == request.auth.uid
+        && (
+          (isSignedIn() && data.submitterUid == request.auth.uid) ||
+          (!isSignedIn() && isValidQrSubmitterUid(data.submitterUid))
+        )
         && data.indexNumber is string && data.indexNumber.size() > 0 && data.indexNumber.size() <= 30
         && data.courseId is string && data.courseId.size() > 0 && data.courseId.size() <= 60
         && data.date is string && data.date.size() > 0 && data.date.size() <= 20
@@ -272,35 +324,70 @@ service cloud.firestore {
       allow delete: if isAuthorizedStaff() && isValidId(studentId);
     }
 
-    // Courses Collection (Strictly Authorized Personnel Only - ZERO public access)
+    // Courses Collection (HOD manages catalog; Lecturers access only assigned courses)
     match /courses/{courseId} {
-      allow get: if isAuthorizedStaff() && isValidId(courseId);
-      allow list: if isAuthorizedStaff();
-      allow create: if isAuthorizedStaff() && isValidId(courseId) && isValidCourse(incoming());
-      allow update: if isAuthorizedStaff() && isValidId(courseId) && isValidCourse(incoming());
-      allow delete: if isAuthorizedStaff() && isValidId(courseId);
+      allow get: if isValidId(courseId) && canAccessCourse(courseId);
+      allow list: if isAdmin() || isClassRep() || (
+        isLecturer() &&
+        ('assignedCourseIds' in get(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())).data) &&
+        get(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())).data.assignedCourseIds is list &&
+        resource.data.id in get(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())).data.assignedCourseIds
+      );
+      allow create: if isValidId(courseId) && isValidCourse(incoming()) && isAdmin();
+      allow update: if isValidCourse(incoming()) && isValidId(courseId) && isAdmin();
+      allow delete: if isAdmin() && isValidId(courseId);
     }
 
-    // Timetable Slots Collection (Strictly Authorized Personnel Only - ZERO public access)
+    // Timetable Slots Collection (HOD manages all; Lecturers access only assigned course slots)
     match /timetable/{slotId} {
-      allow get: if isAuthorizedStaff() && isValidId(slotId);
-      allow list: if isAuthorizedStaff();
-      allow create: if isAuthorizedStaff() && isValidId(slotId) && isValidTimetableSlot(incoming());
-      allow update: if isAuthorizedStaff() && isValidId(slotId) && isValidTimetableSlot(incoming());
-      allow delete: if isAuthorizedStaff() && isValidId(slotId);
+      allow get: if isValidId(slotId) && canAccessCourse(existing().courseId);
+      allow list: if isAdmin() || isClassRep() || (
+        isLecturer() &&
+        ('assignedCourseIds' in get(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())).data) &&
+        get(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())).data.assignedCourseIds is list &&
+        resource.data.courseId in get(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())).data.assignedCourseIds
+      );
+      allow create: if isValidId(slotId) && isValidTimetableSlot(incoming()) && (isAdmin() || lecturerHasCourse(incoming().courseId));
+      allow update: if isValidTimetableSlot(incoming()) && isValidId(slotId) && (
+        isAdmin() || (lecturerHasCourse(existing().courseId) && lecturerHasCourse(incoming().courseId))
+      );
+      allow delete: if isValidId(slotId) && (isAdmin() || lecturerHasCourse(existing().courseId));
     }
 
-    // Attendance Records Collection (Strictly Authorized Personnel Only)
+    // Attendance Records Collection (Strictly Authorized Personnel; Lecturers scoped to assigned courses)
     match /attendance/{attendanceId} {
-      allow get: if isAuthorizedStaff() && isValidId(attendanceId);
-      allow list: if isAuthorizedStaff();
-      allow create: if isAuthorizedStaff() && isValidId(attendanceId) && isValidAttendance(incoming());
-      allow update: if isAuthorizedStaff() && isValidId(attendanceId) && isValidAttendance(incoming()) && (
-        isAdmin() ||
-        existing().isFinalized == false ||
-        incoming().diff(existing()).affectedKeys().hasOnly(['isFinalized'])
+      allow get: if isValidId(attendanceId) && canAccessCourse(existing().courseId);
+      allow list: if isAdmin() || isClassRep() || (
+        isLecturer() &&
+        ('assignedCourseIds' in get(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())).data) &&
+        get(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())).data.assignedCourseIds is list &&
+        resource.data.courseId in get(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())).data.assignedCourseIds
+      );
+      allow create: if isValidId(attendanceId) && isValidAttendance(incoming()) && canAccessCourse(incoming().courseId);
+      allow update: if isValidAttendance(incoming()) && isValidId(attendanceId) && (
+        isAdmin() || (
+          canAccessCourse(existing().courseId) &&
+          canAccessCourse(incoming().courseId) &&
+          (existing().isFinalized == false || incoming().diff(existing()).affectedKeys().hasOnly(['isFinalized']))
+        )
       );
       allow delete: if isAdmin() && isValidId(attendanceId);
+    }
+
+    // Cancelled Class Sessions (HOD & Assigned Course Lecturers manage; Class Reps read-only)
+    match /cancelledClasses/{cancelId} {
+      allow get: if isValidId(cancelId) && canAccessCourse(existing().courseId);
+      allow list: if isAdmin() || isClassRep() || (
+        isLecturer() &&
+        ('assignedCourseIds' in get(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())).data) &&
+        get(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())).data.assignedCourseIds is list &&
+        resource.data.courseId in get(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())).data.assignedCourseIds
+      );
+      allow create: if isValidId(cancelId) && isValidCancelledClass(incoming()) && (isAdmin() || lecturerHasCourse(incoming().courseId));
+      allow update: if isValidId(cancelId) && isValidCancelledClass(incoming()) && (
+        isAdmin() || (lecturerHasCourse(existing().courseId) && lecturerHasCourse(incoming().courseId))
+      );
+      allow delete: if isValidId(cancelId) && (isAdmin() || lecturerHasCourse(existing().courseId));
     }
 
     // Audit Logs Collection: Append-Only by Authorized Staff, Immutable
@@ -353,14 +440,15 @@ service cloud.firestore {
       allow delete: if isAdmin() && isValidId(settingId);
     }
 
-    // Student QR Check-In Queue (Isolated by submitterUid, processed by authorized staff)
+    // Student QR Check-In Queue (Isolated by submitterUid / unguessable CSPRNG ticketId, processed by authorized staff)
     match /qrCheckIns/{ticketId} {
       allow get: if isValidId(ticketId) && (
         isAuthorizedStaff() ||
-        (isSignedIn() && existing().submitterUid == request.auth.uid)
+        (isSignedIn() && existing().submitterUid == request.auth.uid) ||
+        (!isSignedIn() && isValidQrTicketId(ticketId))
       );
       allow list: if isAuthorizedStaff();
-      allow create: if isSignedIn() && isValidId(ticketId) && isValidQrCheckInCreate(incoming());
+      allow create: if isValidQrTicketId(ticketId) && isValidQrCheckInCreate(incoming()) && incoming().id == ticketId;
       allow update: if isAuthorizedStaff() && isValidId(ticketId) && isValidQrCheckInUpdate(incoming());
       allow delete: if isAdmin() && isValidId(ticketId);
     }

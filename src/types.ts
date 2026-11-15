@@ -45,6 +45,19 @@ export interface AttendanceRecord {
   gpsVerifiedStudentIds?: string[];
 }
 
+export interface CancelledClass {
+  id: string;
+  date: string; // YYYY-MM-DD
+  courseId: string;
+  timetableSlotId?: string;
+  stream?: string; // undefined = all divisions/streams for that course on this date
+  reason: string;
+  makeupNote?: string;
+  cancelledBy: string;
+  cancelledByEmail?: string;
+  cancelledAt: string; // ISO timestamp
+}
+
 export interface GpsGeofenceSettings {
   enabled: boolean;
   campusName: string;
@@ -103,6 +116,7 @@ export interface AuthorizedUser {
   role: UserRole;
   department?: string;
   courseAssigned?: string;
+  assignedCourseIds?: string[];
   level?: string;
   stream?: string; // e.g. "IT A" if class rep is scoped to specific division
   addedAt?: string;
@@ -114,6 +128,7 @@ export interface CurrentUser {
   role: UserRole;
   department: string;
   stream?: string;
+  assignedCourseIds?: string[];
   photoURL?: string;
   uid?: string;
 }

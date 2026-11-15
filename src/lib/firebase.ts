@@ -13,8 +13,10 @@ import {
   getFirestore,
   persistentLocalCache,
   persistentMultipleTabManager,
+  memoryLocalCache,
+  enableNetwork,
+  disableNetwork,
   doc,
-  getDoc,
   getDocFromServer
 } from 'firebase/firestore';
 import defaultConfig from '../../firebase-applet-config.json';
@@ -30,24 +32,53 @@ const firebaseConfig = {
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || defaultConfig.messagingSenderId,
 };
 
+export const activeFirestoreDatabaseId = firebaseConfig.firestoreDatabaseId;
+
 // Initialize Firebase App
 const app = initializeApp(firebaseConfig);
 
-// Initialize Firestore with resilient auto-detect long-polling and multi-tab persistent cache
+// Initialize Firestore with forced long-polling (prevents 10s WebChannel streaming hangs in iframes/proxies)
+// and multi-tab persistent cache with clean memoryLocalCache fallback
 export const db = (() => {
   try {
     return initializeFirestore(
       app,
       {
-        experimentalAutoDetectLongPolling: true,
+        experimentalForceLongPolling: true,
+        experimentalLongPollingOptions: { timeoutSeconds: 15 },
         localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
       },
       firebaseConfig.firestoreDatabaseId
     );
   } catch {
-    return getFirestore(app, firebaseConfig.firestoreDatabaseId);
+    try {
+      return initializeFirestore(
+        app,
+        {
+          experimentalForceLongPolling: true,
+          experimentalLongPollingOptions: { timeoutSeconds: 15 },
+          localCache: memoryLocalCache(),
+        },
+        firebaseConfig.firestoreDatabaseId
+      );
+    } catch {
+      return getFirestore(app, firebaseConfig.firestoreDatabaseId);
+    }
   }
 })();
+
+// Sync browser online/offline transitions so Firestore enters offline cache cleanly without 10s stream timeouts
+if (typeof window !== 'undefined') {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    disableNetwork(db).catch(() => {});
+  }
+  window.addEventListener('offline', () => {
+    disableNetwork(db).catch(() => {});
+  });
+  window.addEventListener('online', () => {
+    enableNetwork(db).catch(() => {});
+  });
+}
 
 // Initialize Firebase Authentication
 export const auth = getAuth(app);
@@ -102,14 +133,32 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
-// Test Connection to Firestore with graceful timeout
+// Test Connection to Firestore using an abortable HTTP preflight before server read
 export async function testFirestoreConnection(): Promise<boolean> {
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
     return false;
   }
+
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const abortTimer = setTimeout(() => controller?.abort(), 4000);
+
   try {
+    const dbId = encodeURIComponent(firebaseConfig.firestoreDatabaseId || '(default)');
+    const probeUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(firebaseConfig.projectId)}/databases/${dbId}/documents/test/connection?key=${encodeURIComponent(firebaseConfig.apiKey)}`;
+    const res = await fetch(probeUrl, {
+      method: 'GET',
+      cache: 'no-store',
+      signal: controller?.signal,
+    });
+    clearTimeout(abortTimer);
+
+    // Reaching Firestore (200 OK or 404 NOT_FOUND for test/connection) confirms backend reachability
+    if (!res.ok && res.status !== 404) {
+      return false;
+    }
+
     const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('Connection check timeout')), 3500);
+      setTimeout(() => reject(new Error('Connection check timeout')), 4500);
     });
     await Promise.race([
       getDocFromServer(doc(db, 'test', 'connection')),
@@ -117,15 +166,13 @@ export async function testFirestoreConnection(): Promise<boolean> {
     ]);
     return true;
   } catch (error) {
-    if (error instanceof Error && (error.message.includes('the client is offline') || error.message.includes('timeout'))) {
+    clearTimeout(abortTimer);
+    if (error instanceof Error && (error.name === 'AbortError' || error.message.includes('the client is offline') || error.message.includes('timeout'))) {
       console.info('[Firestore] Background connection warming up or operating in cached mode.');
     }
     return false;
   }
 }
-
-// Initial connection check on module load
-testFirestoreConnection().catch(() => {});
 
 // Auth Helper Functions
 export async function signInWithGoogle(forceAccountPrompt = false) {

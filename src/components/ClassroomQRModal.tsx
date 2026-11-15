@@ -21,7 +21,9 @@ import {
   CheckCircle2,
   BookOpen,
   Lock,
-  KeyRound
+  KeyRound,
+  Ban,
+  CalendarClock
 } from 'lucide-react';
 
 interface ClassroomQRModalProps {
@@ -41,7 +43,15 @@ export const ClassroomQRModal: React.FC<ClassroomQRModalProps> = ({
   stream,
   onSelectCourse
 }) => {
-  const { students, courses, timetable, attendanceRecords, geofenceSettings, updateGeofenceSettings } = useApp();
+  const {
+    students,
+    courses,
+    timetable,
+    attendanceRecords,
+    geofenceSettings,
+    updateGeofenceSettings,
+    getCancellationForSession
+  } = useApp();
   const [selectedCourseId, setSelectedCourseId] = useState<string>(course?.id || courses[0]?.id || '');
   const [qrCodeUrl, setQrCodeUrl] = useState<string>('');
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
@@ -101,6 +111,15 @@ export const ClassroomQRModal: React.FC<ClassroomQRModalProps> = ({
       null
     );
   }, [scheduledForToday, timetable, activeCourse?.id, date, cleanStream]);
+
+  const activeCancellation = activeCourse
+    ? getCancellationForSession({
+        date,
+        courseId: activeCourse.id,
+        slotId: activeCourseSlot?.id,
+        stream: cleanStream
+      })
+    : undefined;
 
   const handleCourseSwitch = (newId: string) => {
     setSelectedCourseId(newId);
@@ -220,17 +239,23 @@ export const ClassroomQRModal: React.FC<ClassroomQRModalProps> = ({
   }).length;
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 md:p-6 overflow-y-auto">
+    <div
+      className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 md:p-6 overscroll-contain"
+      onClick={onClose}
+    >
       <div
         ref={containerRef}
-        className={`bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 w-full max-w-5xl overflow-hidden flex flex-col transition-all ${
-          isFullscreen ? 'h-screen max-w-none rounded-none justify-between p-6' : 'max-h-[94vh]'
+        onClick={(e) => e.stopPropagation()}
+        className={`bg-white dark:bg-slate-900 rounded-2xl sm:rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 w-full max-w-5xl flex flex-col transition-all ${
+          isFullscreen
+            ? 'h-screen max-w-none rounded-none justify-between p-6 overflow-hidden'
+            : 'max-h-[85dvh] sm:max-h-[92dvh] overflow-y-auto lg:overflow-hidden overscroll-contain'
         }`}
       >
         {/* Top Header / Projector Bar */}
-        <div className="bg-gradient-to-r from-[#00243a] via-[#003b5c] to-[#005a78] text-white p-4 sm:p-6 flex items-start sm:items-center justify-between gap-4 shrink-0">
-          <div className="flex items-start sm:items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-white p-1.5 flex items-center justify-center shrink-0 shadow-md">
+        <div className="bg-gradient-to-r from-[#00243a] via-[#003b5c] to-[#005a78] text-white p-3 sm:p-6 flex items-start sm:items-center justify-between gap-2.5 sm:gap-4 lg:shrink-0">
+          <div className="flex items-start sm:items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
+            <div className="w-9 h-9 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl bg-white p-1 sm:p-1.5 flex items-center justify-center shrink-0 shadow-md">
               <img
                 src="/assets/uenr_logo.jpg"
                 alt="UENR Emblem"
@@ -240,52 +265,60 @@ export const ClassroomQRModal: React.FC<ClassroomQRModalProps> = ({
                 }}
               />
             </div>
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-[10px] font-black uppercase tracking-widest text-[#8dc63f] bg-emerald-950/60 px-2.5 py-0.5 rounded-full border border-emerald-400/30">
-                  Live Classroom Attendance
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                <span
+                  className={`text-[9px] sm:text-[10px] font-black uppercase tracking-widest px-2 sm:px-2.5 py-0.5 rounded-full border ${
+                    activeCancellation
+                      ? 'text-rose-200 bg-rose-950/70 border-rose-400/40'
+                      : 'text-[#8dc63f] bg-emerald-950/60 border-emerald-400/30'
+                  }`}
+                >
+                  {activeCancellation ? 'Class Session Cancelled' : 'Live Classroom Attendance'}
                 </span>
-                <span className="text-xs text-slate-300 font-semibold">
+                <span className="text-[11px] sm:text-xs text-slate-300 font-semibold">
                   {cleanStream} · {date}
                 </span>
               </div>
 
               {/* Course Title & Code */}
-              <h2 className="text-lg sm:text-2xl font-black text-white mt-0.5">
+              <h2 className="text-base sm:text-2xl font-black text-white mt-0.5 leading-snug break-words">
                 {activeCourse.code}: {activeCourse.title}
               </h2>
 
               {/* Lecturer Info */}
-              <div className="flex items-center gap-2 flex-wrap text-xs text-slate-200 mt-1">
-                <span className="inline-flex items-center gap-1.5 bg-white/10 px-2.5 py-0.5 rounded-md font-medium">
+              <div className="flex items-center gap-2 flex-wrap text-[11px] sm:text-xs text-slate-200 mt-1">
+                <span className="inline-flex items-center gap-1.5 bg-white/10 px-2 sm:px-2.5 py-0.5 rounded-md font-medium">
                   Lecturer: <strong className="text-white underline decoration-[#8dc63f] decoration-2">{activeCourse.lecturer || 'Unassigned'}</strong>
                 </span>
-                <span>•</span>
-                <span className="text-slate-300">{activeCourse.department || 'Department of Information Technology & Decision Sciences'}</span>
+                <span className="hidden sm:inline">•</span>
+                <span className="hidden sm:inline text-slate-300">{activeCourse.department || 'Department of Information Technology & Decision Sciences'}</span>
               </div>
 
               {/* Selected Course Indicator & Optional Quick Switch */}
-              <div className="mt-2.5 flex items-center gap-2 flex-wrap">
-                <div className="flex items-center gap-2 bg-emerald-950/80 border border-emerald-400/50 text-emerald-300 px-3 py-1.5 rounded-xl shadow-md">
-                  <span className="relative flex h-2.5 w-2.5">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
-                  </span>
-                  <span className="text-[10px] font-black uppercase tracking-wider text-emerald-300">
-                    {detectedActiveSlot?.courseId === activeCourse.id ? 'Active Slot:' : 'Selected Course:'}
-                  </span>
-                  <span className="text-xs font-black text-white">
-                    {activeCourse.code}
-                  </span>
-                  {activeCourseSlot && (
-                    <span className="text-[10px] font-mono text-emerald-200 bg-emerald-900/80 px-2 py-0.5 rounded-md border border-emerald-500/30">
-                      {activeCourseSlot.startTime} – {activeCourseSlot.endTime} · {activeCourseSlot.venue}
+              <div className="mt-2 sm:mt-2.5 flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-2 sm:flex-wrap w-full">
+                <div className="w-full sm:w-auto max-w-full flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-2 bg-emerald-950/80 border border-emerald-400/50 text-emerald-300 px-2.5 sm:px-3 py-1.5 rounded-xl shadow-md">
+                  <div className="flex items-center flex-wrap gap-x-2 gap-y-1 min-w-0">
+                    <span className="relative flex h-2 w-2 sm:h-2.5 sm:w-2.5 shrink-0">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 sm:h-2.5 sm:w-2.5 bg-emerald-500"></span>
                     </span>
-                  )}
+                    <span className="text-[10px] font-black uppercase tracking-wider text-emerald-300 whitespace-nowrap">
+                      {detectedActiveSlot?.courseId === activeCourse.id ? 'Active Slot:' : 'Selected Course:'}
+                    </span>
+                    <span className="text-xs font-black text-white whitespace-nowrap">
+                      {activeCourse.code}
+                    </span>
+                    {activeCourseSlot && (
+                      <span className="text-[10px] font-mono text-emerald-200 bg-emerald-900/80 px-2 py-0.5 rounded-md border border-emerald-500/30 truncate max-w-full">
+                        {activeCourseSlot.startTime} – {activeCourseSlot.endTime} · {activeCourseSlot.venue}
+                      </span>
+                    )}
+                  </div>
                   <select
                     value={activeCourse.id}
                     onChange={(e) => handleCourseSwitch(e.target.value)}
-                    className="ml-1 bg-black/40 text-slate-200 text-[10px] font-bold px-2 py-0.5 rounded-md border border-white/20 focus:outline-none cursor-pointer"
+                    className="w-full sm:w-auto sm:max-w-[230px] bg-black/40 text-slate-100 text-[11px] sm:text-[10px] font-bold px-2.5 py-1 sm:py-0.5 rounded-lg sm:rounded-md border border-white/20 focus:outline-none focus:ring-1 focus:ring-emerald-400/60 cursor-pointer truncate"
                     title="Switch projected course for this session"
                   >
                     {courses.map((c) => (
@@ -298,8 +331,8 @@ export const ClassroomQRModal: React.FC<ClassroomQRModalProps> = ({
 
                 {/* Quick Pills for Today's Scheduled Lectures */}
                 {scheduledForToday.length > 0 && (
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="text-[10px] font-bold text-slate-300 hidden sm:inline">Today's Schedule:</span>
+                  <div className="flex items-center gap-1.5 overflow-x-auto flex-nowrap sm:flex-wrap pb-0.5 sm:pb-0 w-full sm:w-auto">
+                    <span className="text-[10px] font-bold text-slate-300 hidden sm:inline shrink-0">Today's Schedule:</span>
                     {scheduledForToday.map((slot) => {
                       const c = courses.find((crs) => crs.id === slot.courseId);
                       if (!c) return null;
@@ -309,14 +342,14 @@ export const ClassroomQRModal: React.FC<ClassroomQRModalProps> = ({
                           key={slot.id}
                           type="button"
                           onClick={() => handleCourseSwitch(c.id)}
-                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1 border ${
+                          className={`px-2 sm:px-2.5 py-1 rounded-lg text-[10px] sm:text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1 border whitespace-nowrap shrink-0 ${
                             isCurrent
                               ? 'bg-[#8dc63f] text-slate-950 border-[#8dc63f] shadow-sm font-black ring-2 ring-emerald-300/40'
                               : 'bg-white/10 text-white border-white/20 hover:bg-white/20'
                           }`}
                           title={`Switch to ${c.code} (${c.lecturer})`}
                         >
-                          <Clock className="w-3 h-3" />
+                          <Clock className="w-3 h-3 shrink-0" />
                           <span>{c.code} ({slot.startTime})</span>
                           {isCurrent && <span className="text-[9px] uppercase bg-black/20 px-1 rounded-sm">Active</span>}
                         </button>
@@ -328,165 +361,199 @@ export const ClassroomQRModal: React.FC<ClassroomQRModalProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <button
               onClick={toggleFullscreen}
-              className="p-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-all cursor-pointer"
+              className="p-2 sm:p-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-all cursor-pointer"
               title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen for Projector'}
             >
-              {isFullscreen ? <Minimize2 className="w-5 h-5" /> : <Maximize2 className="w-5 h-5" />}
+              {isFullscreen ? <Minimize2 className="w-4 h-4 sm:w-5 sm:h-5" /> : <Maximize2 className="w-4 h-4 sm:w-5 sm:h-5" />}
             </button>
             <button
               onClick={onClose}
-              className="p-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-all cursor-pointer"
+              className="p-2 sm:p-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-all cursor-pointer"
               title="Close QR Session"
             >
-              <X className="w-5 h-5" />
+              <X className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
           </div>
         </div>
 
         {/* Modal Main Body */}
-        <div className="p-4 sm:p-8 flex-1 overflow-y-auto grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
+        <div className="p-4 sm:p-8 lg:flex-1 lg:overflow-y-auto grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
           
-          {/* Left / Center: Big QR Code on Display */}
+          {/* Left / Center: Big QR Code on Display (or Cancelled Notice) */}
           <div className="lg:col-span-7 flex flex-col items-center justify-center text-center space-y-4">
-            <div className="p-4 sm:p-6 bg-white dark:bg-white rounded-3xl shadow-xl border-4 border-[#003b5c] max-w-sm sm:max-w-md w-full flex flex-col items-center justify-center">
-              {qrCodeUrl ? (
-                <img
-                  src={qrCodeUrl}
-                  alt={`Classroom Attendance QR Code for ${activeCourse.code}`}
-                  className="w-full aspect-square max-w-[340px] sm:max-w-[380px] object-contain rounded-2xl"
-                />
-              ) : (
-                <div className="w-72 h-72 flex items-center justify-center">
-                  <div className="w-10 h-10 border-4 border-[#003b5c] border-t-transparent rounded-full animate-spin"></div>
+            {activeCancellation ? (
+              <div className="w-full max-w-md rounded-3xl bg-rose-50 dark:bg-rose-950/40 border-2 border-rose-300 dark:border-rose-800 p-6 sm:p-8 text-center space-y-4 shadow-xl">
+                <div className="w-16 h-16 rounded-2xl bg-rose-100 dark:bg-rose-900/60 text-rose-700 dark:text-rose-300 flex items-center justify-center mx-auto">
+                  <Ban className="w-8 h-8" />
                 </div>
-              )}
-              <div className="mt-2 text-center text-slate-900 font-extrabold text-xs sm:text-sm tracking-wide">
-                Scan with phone camera for <strong>{activeCourse.code} ({activeCourse.lecturer})</strong>
-              </div>
-            </div>
-
-            {/* Geofence & In-Room PIN Security Card for Classroom Projector */}
-            <div className="w-full max-w-sm sm:max-w-md bg-gradient-to-r from-emerald-950/80 via-slate-900 to-[#002b45] border border-emerald-500/40 rounded-2xl p-3.5 text-left text-white shadow-lg space-y-2.5">
-              <div className="flex items-center justify-between gap-2 pb-2 border-b border-white/10">
-                <div className="flex items-center gap-2">
-                  <span className="relative flex h-2.5 w-2.5">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
-                  </span>
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-300">
-                    <MapPin className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Anti-Hostel Geofence Active</span>
-                  </div>
+                <div className="space-y-1.5">
+                  <h3 className="text-lg font-black text-rose-950 dark:text-rose-100">
+                    Class Cancelled — QR Check-In Paused
+                  </h3>
+                  <p className="text-xs text-rose-800 dark:text-rose-200 leading-relaxed">
+                    <strong>Reason:</strong> {activeCancellation.reason}
+                  </p>
+                  {activeCancellation.makeupNote && (
+                    <p className="text-xs font-semibold text-teal-800 dark:text-teal-300 inline-flex items-center justify-center gap-1.5 pt-1">
+                      <CalendarClock className="w-3.5 h-3.5 shrink-0" />
+                      <span>Makeup Note: {activeCancellation.makeupNote}</span>
+                    </p>
+                  )}
                 </div>
-
-                {/* Geofence Mode Selector */}
-                <select
-                  value={geofenceRadius}
-                  onChange={(e) => updateGeofenceSettings({ radiusMeters: Number(e.target.value) })}
-                  className="bg-black/60 text-[10px] font-bold text-emerald-300 px-2.5 py-1 rounded-lg border border-emerald-500/40 focus:outline-none cursor-pointer"
-                  title="Radius around UENR Main Campus required to scan"
+                <p className="text-[11px] text-rose-700/80 dark:text-rose-300/80">
+                  Cancelled by {activeCancellation.cancelledBy}. Restore the class session from the Attendance page if you wish to resume projector QR check-in.
+                </p>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-5 py-2.5 rounded-xl bg-rose-700 hover:bg-rose-800 text-white text-xs font-bold cursor-pointer"
                 >
-                  <option value={2500}>UENR Campus & Halls (2.5 km)</option>
-                  <option value={1500}>Academic Complex (1.5 km)</option>
-                  <option value={800}>Strict Hall Vicinity (800m)</option>
-                  <option value={500}>Single Lecture Hall (500m)</option>
-                  <option value={0}>Bypass Geofence (Online / Off)</option>
-                </select>
+                  Close Projector View
+                </button>
               </div>
-
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <KeyRound className="w-3.5 h-3.5 text-[#8dc63f]" />
-                    <span className="text-[10px] uppercase tracking-wider font-extrabold text-slate-300">
-                      In-Room Projector PIN
-                    </span>
-                    {rollingPinEnabled && (
-                      <span className="text-[9px] font-mono font-black bg-emerald-500/20 text-[#8dc63f] px-1.5 py-0.5 rounded-full border border-emerald-500/30 animate-pulse">
-                        ⏳ Rotates in {rollingPinData.secondsRemaining}s
-                      </span>
-                    )}
+            ) : (
+              <>
+                <div className="p-4 sm:p-6 bg-white dark:bg-white rounded-3xl shadow-xl border-4 border-[#003b5c] max-w-sm sm:max-w-md w-full flex flex-col items-center justify-center">
+                  {qrCodeUrl ? (
+                    <img
+                      src={qrCodeUrl}
+                      alt={`Classroom Attendance QR Code for ${activeCourse.code}`}
+                      className="w-full aspect-square max-w-[340px] sm:max-w-[380px] object-contain rounded-2xl"
+                    />
+                  ) : (
+                    <div className="w-72 h-72 flex items-center justify-center">
+                      <div className="w-10 h-10 border-4 border-[#003b5c] border-t-transparent rounded-full animate-spin"></div>
+                    </div>
+                  )}
+                  <div className="mt-2 text-center text-slate-900 font-extrabold text-xs sm:text-sm tracking-wide">
+                    Scan with phone camera for <strong>{activeCourse.code} ({activeCourse.lecturer})</strong>
                   </div>
-                  <p className="text-[10px] text-slate-300 line-clamp-1 mt-0.5">
-                    {rollingPinEnabled
-                      ? 'Anti-WhatsApp protection: Code auto-expires in 30s'
-                      : 'PIN override disabled. Only physical GPS permitted.'}
+                </div>
+
+                {/* Geofence & In-Room PIN Security Card for Classroom Projector */}
+                <div className="w-full max-w-sm sm:max-w-md bg-gradient-to-r from-emerald-950/80 via-slate-900 to-[#002b45] border border-emerald-500/40 rounded-2xl p-3.5 text-left text-white shadow-lg space-y-2.5">
+                  <div className="flex items-center justify-between gap-2 pb-2 border-b border-white/10">
+                    <div className="flex items-center gap-2">
+                      <span className="relative flex h-2.5 w-2.5">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                      </span>
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-300">
+                        <MapPin className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Anti-Hostel Geofence Active</span>
+                      </div>
+                    </div>
+
+                    {/* Geofence Mode Selector */}
+                    <select
+                      value={geofenceRadius}
+                      onChange={(e) => updateGeofenceSettings({ radiusMeters: Number(e.target.value) })}
+                      className="bg-black/60 text-[10px] font-bold text-emerald-300 px-2.5 py-1 rounded-lg border border-emerald-500/40 focus:outline-none cursor-pointer"
+                      title="Radius around UENR Main Campus required to scan"
+                    >
+                      <option value={2500}>UENR Campus & Halls (2.5 km)</option>
+                      <option value={1500}>Academic Complex (1.5 km)</option>
+                      <option value={800}>Strict Hall Vicinity (800m)</option>
+                      <option value={500}>Single Lecture Hall (500m)</option>
+                      <option value={0}>Bypass Geofence (Online / Off)</option>
+                    </select>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <KeyRound className="w-3.5 h-3.5 text-[#8dc63f]" />
+                        <span className="text-[10px] uppercase tracking-wider font-extrabold text-slate-300">
+                          In-Room Projector PIN
+                        </span>
+                        {rollingPinEnabled && (
+                          <span className="text-[9px] font-mono font-black bg-emerald-500/20 text-[#8dc63f] px-1.5 py-0.5 rounded-full border border-emerald-500/30 animate-pulse">
+                            ⏳ Rotates in {rollingPinData.secondsRemaining}s
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-slate-300 line-clamp-1 mt-0.5">
+                        {rollingPinEnabled
+                          ? 'Anti-WhatsApp protection: Code auto-expires in 30s'
+                          : 'PIN override disabled. Only physical GPS permitted.'}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      {rollingPinEnabled ? (
+                        <div className="bg-slate-950 border-2 border-emerald-400/60 px-3.5 py-1 rounded-xl text-center shadow-inner">
+                          <span className="font-mono text-xl sm:text-2xl font-black tracking-widest text-[#8dc63f] select-all">
+                            {activeDisplayPin}
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="bg-slate-950/80 border border-slate-700 px-2.5 py-1 rounded-xl text-center">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase">GPS Only</span>
+                        </div>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => updateGeofenceSettings({ rollingPinEnabled: !rollingPinEnabled })}
+                        className="p-1 rounded-lg bg-black/40 hover:bg-black/70 text-slate-300 text-[10px] border border-white/20 transition-all cursor-pointer"
+                        title={rollingPinEnabled ? 'Click to disable PIN (GPS Only)' : 'Click to enable 30s Rolling PIN'}
+                      >
+                        {rollingPinEnabled ? 'Disable' : 'Enable'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Room Calibration Row */}
+                  <div className="flex items-center justify-between text-[10px] text-slate-300 pt-1.5 border-t border-white/10 flex-wrap gap-1">
+                    <span className="text-slate-400 truncate">
+                      📍 {geofenceSettings.campusName}: {geofenceSettings.latitude.toFixed(5)}, {geofenceSettings.longitude.toFixed(5)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleCalibrateLocation}
+                      disabled={isCalibrating}
+                      className="px-2 py-0.5 rounded bg-emerald-900/60 hover:bg-emerald-800 text-emerald-300 font-bold border border-emerald-500/30 transition-all cursor-pointer disabled:opacity-50 text-[10px]"
+                      title="Calibrate geofence center to your exact current lecture room GPS coordinates"
+                    >
+                      {isCalibrating ? 'Calibrating...' : '🎯 Pin My Hall GPS'}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="max-w-md space-y-1">
+                  <p className="text-xs sm:text-sm font-bold text-slate-700 dark:text-slate-200">
+                    ⚡ Option A: Index Number Confirmation · {activeCourse.code}
+                  </p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Students scan the code, verify their campus location, enter their Index Number (e.g. <span className="font-mono font-bold text-[#007c82]">UEB3100122</span>), and get marked present instantly.
                   </p>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0">
-                  {rollingPinEnabled ? (
-                    <div className="bg-slate-950 border-2 border-emerald-400/60 px-3.5 py-1 rounded-xl text-center shadow-inner">
-                      <span className="font-mono text-xl sm:text-2xl font-black tracking-widest text-[#8dc63f] select-all">
-                        {activeDisplayPin}
-                      </span>
-                    </div>
-                  ) : (
-                    <div className="bg-slate-950/80 border border-slate-700 px-2.5 py-1 rounded-xl text-center">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase">GPS Only</span>
-                    </div>
-                  )}
-
+                {/* Quick Actions Bar */}
+                <div className="flex items-center gap-2 pt-2 flex-wrap justify-center">
                   <button
-                    type="button"
-                    onClick={() => updateGeofenceSettings({ rollingPinEnabled: !rollingPinEnabled })}
-                    className="p-1 rounded-lg bg-black/40 hover:bg-black/70 text-slate-300 text-[10px] border border-white/20 transition-all cursor-pointer"
-                    title={rollingPinEnabled ? 'Click to disable PIN (GPS Only)' : 'Click to enable 30s Rolling PIN'}
+                    onClick={handleCopyLink}
+                    className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
                   >
-                    {rollingPinEnabled ? 'Disable' : 'Enable'}
+                    {copiedLink ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
+                    <span>{copiedLink ? 'Copied Link!' : 'Copy Check-In Link'}</span>
                   </button>
+
+                  <a
+                    href={checkInUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3.5 py-2 rounded-xl bg-[#007c82] hover:bg-[#00666b] text-white text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs"
+                  >
+                    <ExternalLink className="w-4 h-4" />
+                    <span>Test {activeCourse.code} Check-in</span>
+                  </a>
                 </div>
-              </div>
-
-              {/* Room Calibration Row */}
-              <div className="flex items-center justify-between text-[10px] text-slate-300 pt-1.5 border-t border-white/10 flex-wrap gap-1">
-                <span className="text-slate-400 truncate">
-                  📍 {geofenceSettings.campusName}: {geofenceSettings.latitude.toFixed(5)}, {geofenceSettings.longitude.toFixed(5)}
-                </span>
-                <button
-                  type="button"
-                  onClick={handleCalibrateLocation}
-                  disabled={isCalibrating}
-                  className="px-2 py-0.5 rounded bg-emerald-900/60 hover:bg-emerald-800 text-emerald-300 font-bold border border-emerald-500/30 transition-all cursor-pointer disabled:opacity-50 text-[10px]"
-                  title="Calibrate geofence center to your exact current lecture room GPS coordinates"
-                >
-                  {isCalibrating ? 'Calibrating...' : '🎯 Pin My Hall GPS'}
-                </button>
-              </div>
-            </div>
-
-            <div className="max-w-md space-y-1">
-              <p className="text-xs sm:text-sm font-bold text-slate-700 dark:text-slate-200">
-                ⚡ Option A: Index Number Confirmation · {activeCourse.code}
-              </p>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                Students scan the code, verify their campus location, enter their Index Number (e.g. <span className="font-mono font-bold text-[#007c82]">UEB3100122</span>), and get marked present instantly.
-              </p>
-            </div>
-
-            {/* Quick Actions Bar */}
-            <div className="flex items-center gap-2 pt-2 flex-wrap justify-center">
-              <button
-                onClick={handleCopyLink}
-                className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
-              >
-                {copiedLink ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
-                <span>{copiedLink ? 'Copied Link!' : 'Copy Check-In Link'}</span>
-              </button>
-
-              <a
-                href={checkInUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-3.5 py-2 rounded-xl bg-[#007c82] hover:bg-[#00666b] text-white text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs"
-              >
-                <ExternalLink className="w-4 h-4" />
-                <span>Test {activeCourse.code} Check-in</span>
-              </a>
-            </div>
+              </>
+            )}
           </div>
 
           {/* Right Column: Live Attendee Feed */}
@@ -551,8 +618,8 @@ export const ClassroomQRModal: React.FC<ClassroomQRModalProps> = ({
             {/* Footer Summary */}
             <div className="mt-4 pt-3 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
               <span className="flex items-center gap-1.5 font-semibold">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
-                Scanner active for {activeCourse.code}
+                <span className={`w-2 h-2 rounded-full ${activeCancellation ? 'bg-rose-500' : 'bg-emerald-500 animate-ping'}`}></span>
+                {activeCancellation ? `Scanner paused (${activeCourse.code} cancelled)` : `Scanner active for ${activeCourse.code}`}
               </span>
               <button
                 onClick={onClose}

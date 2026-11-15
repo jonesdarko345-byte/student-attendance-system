@@ -12,13 +12,15 @@ import {
   BookOpen,
   Filter,
   ShieldCheck,
-  GraduationCap
+  GraduationCap,
+  Ban,
+  CalendarClock
 } from 'lucide-react';
 
 export const Reports: React.FC = () => {
-  const { students, courses, attendanceRecords, semester, currentUser } = useApp();
+  const { students, courses, attendanceRecords, cancelledClasses, semester, currentUser, isLecturerCourseScoped } = useApp();
 
-  const userStream = currentUser?.role === 'rep' && currentUser?.stream ? currentUser.stream : null;
+  const userStream = currentUser?.role === 'class_rep' && currentUser?.stream ? currentUser.stream : null;
 
   const [selectedCourseFilter, setSelectedCourseFilter] = useState<string>('all');
   const [selectedLevelFilter, setSelectedLevelFilter] = useState<string>('all');
@@ -45,6 +47,19 @@ export const Reports: React.FC = () => {
     }
     return true;
   });
+
+  // Filter cancelled class sessions by course and stream (excluded from 75% denominator)
+  const relevantCancellations = useMemo(() => {
+    return cancelledClasses
+      .filter((c) => {
+        if (selectedCourseFilter !== 'all' && c.courseId !== selectedCourseFilter) return false;
+        if (selectedStreamFilter !== 'all') {
+          return !c.stream || c.stream === 'all' || c.stream === selectedStreamFilter;
+        }
+        return true;
+      })
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }, [cancelledClasses, selectedCourseFilter, selectedStreamFilter]);
 
   // Filter students by selected level and stream, sorted strictly first by Level, then by Stream, then by name
   const filteredStudents = useMemo(() => {
@@ -171,6 +186,22 @@ export const Reports: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Lecturer Course-Scope Banner */}
+      {isLecturerCourseScoped && (
+        <div className={`rounded-2xl px-4 py-3 border text-xs flex items-center gap-2.5 print:hidden ${
+          courses.length === 0
+            ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200'
+            : 'bg-teal-50 dark:bg-teal-950/40 border-teal-200 dark:border-teal-800 text-teal-900 dark:text-teal-200'
+        }`}>
+          <BookOpen className="w-4 h-4 shrink-0" />
+          <span>
+            {courses.length === 0
+              ? 'No courses are assigned to your account yet. Contact your Head of Department (HOD) to assign courses.'
+              : `Reports scoped to your ${courses.length} assigned course${courses.length === 1 ? '' : 's'}: ${courses.map((c) => c.code).join(', ')}.`}
+          </span>
+        </div>
+      )}
 
       {/* Filter Selector Bar */}
       <div className="bg-white dark:bg-slate-900 rounded-2xl p-4 border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col md:flex-row md:items-center md:justify-between gap-4 print:hidden">
@@ -604,6 +635,82 @@ export const Reports: React.FC = () => {
           </table>
         </div>
       </div>
+
+      {/* Cancelled Class Sessions Log */}
+      {relevantCancellations.length > 0 && (
+        <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-rose-200 dark:border-rose-900/50 overflow-hidden print:hidden">
+          <div className="p-4 sm:p-5 border-b border-rose-100 dark:border-rose-900/40 bg-rose-50/70 dark:bg-rose-950/30 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <div>
+              <h3 className="font-bold text-slate-900 dark:text-white text-base flex items-center gap-2">
+                <Ban className="w-4 h-4 text-rose-600 dark:text-rose-400" />
+                <span>Cancelled Class Sessions Log ({relevantCancellations.length})</span>
+              </h3>
+              <p className="text-xs text-slate-600 dark:text-slate-400">
+                Date-specific cancellations recorded by Lecturers or the HOD. Excluded from students&apos; 75% exam eligibility calculation.
+              </p>
+            </div>
+            <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-rose-100 dark:bg-rose-900/60 text-rose-800 dark:text-rose-200 text-[11px] font-bold border border-rose-200 dark:border-rose-800 shrink-0">
+              No 75% Penalty Applied
+            </span>
+          </div>
+
+          <div className="overflow-x-auto touch-scroll">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/50 text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                  <th className="py-3.5 px-4">Date</th>
+                  <th className="py-3.5 px-4">Course</th>
+                  <th className="py-3.5 px-4">Division</th>
+                  <th className="py-3.5 px-4">Reason</th>
+                  <th className="py-3.5 px-4">Makeup Note</th>
+                  <th className="py-3.5 px-4">Cancelled By</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs sm:text-sm">
+                {relevantCancellations.map((c) => {
+                  const course = courses.find((crs) => crs.id === c.courseId);
+                  return (
+                    <tr key={c.id} className="hover:bg-rose-50/30 dark:hover:bg-rose-950/20 transition-colors">
+                      <td className="py-3.5 px-4 font-semibold text-slate-900 dark:text-white whitespace-nowrap">
+                        {new Date(`${c.date}T00:00:00`).toLocaleDateString('en-GB', {
+                          weekday: 'short',
+                          day: 'numeric',
+                          month: 'short',
+                          year: 'numeric'
+                        })}
+                      </td>
+                      <td className="py-3.5 px-4 font-bold text-slate-800 dark:text-slate-200">
+                        {course ? `${course.code} – ${course.title}` : c.courseId}
+                      </td>
+                      <td className="py-3.5 px-4 font-mono text-xs font-bold">
+                        <span className="px-2 py-0.5 rounded bg-teal-50 dark:bg-teal-950/60 text-[#007c82] dark:text-teal-300 border border-teal-200 dark:border-teal-800">
+                          {c.stream || 'All Divisions'}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4 text-rose-800 dark:text-rose-200 font-medium">
+                        {c.reason}
+                      </td>
+                      <td className="py-3.5 px-4 text-slate-600 dark:text-slate-300">
+                        {c.makeupNote ? (
+                          <span className="inline-flex items-center gap-1 text-teal-700 dark:text-teal-300 font-medium">
+                            <CalendarClock className="w-3.5 h-3.5 shrink-0" />
+                            {c.makeupNote}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400">—</span>
+                        )}
+                      </td>
+                      <td className="py-3.5 px-4 text-slate-600 dark:text-slate-300">
+                        {c.cancelledBy}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

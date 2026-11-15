@@ -1,9 +1,10 @@
-import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   Student,
   Course,
   TimetableSlot,
   AttendanceRecord,
+  CancelledClass,
   AuditLog,
   SemesterConfig,
   CurrentUser,
@@ -24,6 +25,7 @@ import {
 import {
   db,
   auth,
+  activeFirestoreDatabaseId,
   signInWithGoogle,
   logOut,
   onAuthStateChanged,
@@ -74,6 +76,7 @@ interface AppContextType {
   courses: Course[];
   timetable: TimetableSlot[];
   attendanceRecords: AttendanceRecord[];
+  cancelledClasses: CancelledClass[];
   auditLogs: AuditLog[];
   semester: SemesterConfig;
   activeTab: NavigationTab;
@@ -112,11 +115,13 @@ interface AppContextType {
   isCloudConnected: boolean;
   isAuthorized: boolean;
   verifiedRole: UserRole | null;
+  isLecturerCourseScoped: boolean;
   authorizedUsers: AuthorizedUser[];
   loginWithGoogle: (forcePrompt?: boolean) => Promise<void>;
   logoutUser: () => Promise<void>;
   switchAccount: () => Promise<void>;
   addAuthorizedUser: (user: Omit<AuthorizedUser, 'id' | 'addedAt'>) => Promise<void>;
+  updateAuthorizedUser: (id: string, updates: Partial<Omit<AuthorizedUser, 'id' | 'email' | 'addedAt'>>) => Promise<void>;
   removeAuthorizedUser: (id: string) => Promise<void>;
 
   // Sync state
@@ -190,6 +195,23 @@ interface AppContextType {
     alreadyCheckedIn?: boolean;
   }>;
 
+  // Date-specific Class Cancellation actions
+  cancelClassSession: (input: {
+    date: string;
+    courseId: string;
+    timetableSlotId?: string;
+    stream?: string;
+    reason: string;
+    makeupNote?: string;
+  }) => Promise<boolean>;
+  restoreCancelledClass: (cancelId: string) => Promise<boolean>;
+  getCancellationForSession: (params: {
+    date: string;
+    courseId: string;
+    slotId?: string;
+    stream?: string;
+  }) => CancelledClass | undefined;
+
   // GPS Geofence Config
   geofenceSettings: GpsGeofenceSettings;
   updateGeofenceSettings: (updates: Partial<GpsGeofenceSettings>) => Promise<void>;
@@ -210,6 +232,7 @@ const STORAGE_KEYS = {
   COURSES: 'uenr_courses_v3_custom',
   TIMETABLE: 'uenr_timetable_v3_custom',
   ATTENDANCE: 'uenr_attendance_v2',
+  CANCELLED_CLASSES: 'uenr_cancelled_classes_v1',
   AUDIT_LOGS: 'uenr_audit_logs_v2',
   SEMESTER: 'uenr_semester_v3_2026',
   AUTHORIZED: 'uenr_authorized_users_v2'
@@ -271,8 +294,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [authorizedUsers, setAuthorizedUsers] = useState<AuthorizedUser[]>([]);
   const [verifiedRole, setVerifiedRole] = useState<UserRole | null>(null);
+  const [verifiedAssignedCourseIds, setVerifiedAssignedCourseIds] = useState<string[] | null>(null);
   const [isAuthorized, setIsAuthorized] = useState<boolean>(false);
   const [currentUser, setCurrentUserState] = useState<CurrentUser>(GUEST_USER);
+
+  const verifiedAssignedCourseIdsKey = useMemo(
+    () => (verifiedAssignedCourseIds ? [...verifiedAssignedCourseIds].sort().join(',') : 'ALL'),
+    [verifiedAssignedCourseIds]
+  );
 
   // Enforce role ceiling: no user can elevate above their verifiedRole
   const setCurrentUser: React.Dispatch<React.SetStateAction<CurrentUser>> = useCallback(
@@ -424,6 +453,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [courses, setCourses] = useState<Course[]>([]);
   const [timetable, setTimetable] = useState<TimetableSlot[]>([]);
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
+  const [cancelledClasses, setCancelledClasses] = useState<CancelledClass[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
 
   const [semester] = useState<SemesterConfig>(() => {
@@ -532,6 +562,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const status = getNetworkStatus();
       setIsOnline(status.isOnline);
       setIsPoorConnection(status.isPoorConnection);
+      if (!status.isOnline) {
+        setIsCloudConnected(false);
+      } else {
+        testFirestoreConnection().then((connected) => {
+          setIsCloudConnected(connected);
+        });
+      }
     };
 
     window.addEventListener('online', handleNetworkChange);
@@ -594,6 +631,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     if (!isAuthorized) return;
     try {
+      localStorage.setItem(STORAGE_KEYS.CANCELLED_CLASSES, JSON.stringify(cancelledClasses));
+    } catch {}
+  }, [cancelledClasses, isAuthorized]);
+
+  useEffect(() => {
+    if (!isAuthorized) return;
+    try {
       localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify(auditLogs));
     } catch {}
   }, [auditLogs, isAuthorized]);
@@ -633,18 +677,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     hasAttendanceSnapshotRef.current = false;
     processedQrTicketsRef.current.clear();
     pendingQrTicketsRef.current = [];
+    setVerifiedAssignedCourseIds(null);
     setStudents([]);
     setCourses([]);
     setTimetable([]);
     setAttendanceRecords([]);
+    setCancelledClasses([]);
     setAuditLogs([]);
     setAuthorizedUsers([]);
     clearSensitiveStorage();
   }, []);
 
-  // Clean up any old mock records from Firestore & sync authorizedEmails index (authorized staff only)
+  // Clean up any old mock records from Firestore & sync authorizedEmails index (HOD only)
   const initializeFirestore = useCallback(async (role: UserRole) => {
-    if (isSeedingRef.current || !auth.currentUser || auth.currentUser.isAnonymous) return;
+    if (role !== 'hod' || isSeedingRef.current || !auth.currentUser || auth.currentUser.isAnonymous) return;
     isSeedingRef.current = true;
     setIsSyncing(true);
 
@@ -692,47 +738,77 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       batch.delete(doc(db, 'authorizedUsers', 'auth-3'));
       needsCommit = true;
 
-      if (role === 'hod') {
-        const authSnap = await getDocs(collection(db, 'authorizedUsers'));
-        if (authSnap.empty) {
-          INITIAL_AUTHORIZED_USERS.forEach((authUser) => {
-            const cleanEmail = authUser.email.toLowerCase().trim();
-            batch.set(doc(db, 'authorizedUsers', authUser.id), authUser);
-            batch.set(doc(db, 'authorizedEmails', cleanEmail), {
-              email: cleanEmail,
-              name: authUser.name,
-              role: authUser.role,
-              department: authUser.department || 'Department of Information Technology',
-              addedAt: authUser.addedAt
-            });
-            needsCommit = true;
+      // Load courses to backfill legacy courseAssigned text to assignedCourseIds when needed
+      let catalogCourses: Course[] = [];
+      try {
+        const coursesSnap = await getDocs(collection(db, 'courses'));
+        coursesSnap.forEach((d) => catalogCourses.push(d.data() as Course));
+      } catch {}
+
+      const authSnap = await getDocs(collection(db, 'authorizedUsers'));
+      if (authSnap.empty) {
+        INITIAL_AUTHORIZED_USERS.forEach((authUser) => {
+          const cleanEmail = authUser.email.toLowerCase().trim();
+          batch.set(doc(db, 'authorizedUsers', authUser.id), authUser);
+          batch.set(doc(db, 'authorizedEmails', cleanEmail), {
+            email: cleanEmail,
+            name: authUser.name,
+            role: authUser.role,
+            department: authUser.department || 'Department of Information Technology',
+            addedAt: authUser.addedAt
           });
-        } else {
-          // Ensure every authorized user also has an email-indexed lookup doc for rule verification
-          authSnap.forEach((d) => {
-            const u = d.data() as AuthorizedUser;
-            const cleanEmail = (u.email || '').toLowerCase().trim();
-            if (
-              cleanEmail &&
-              cleanEmail !== 'dr.asante@uenr.edu.gh' &&
-              cleanEmail !== 'classrep.it300@uenr.edu.gh' &&
-              ['hod', 'lecturer', 'class_rep'].includes(u.role)
-            ) {
-              batch.set(
-                doc(db, 'authorizedEmails', cleanEmail),
-                {
-                  email: cleanEmail,
-                  name: u.name || 'Academic Personnel',
-                  role: u.role,
-                  department: u.department || 'Department of Information Technology',
-                  addedAt: u.addedAt || new Date().toISOString().split('T')[0]
-                },
-                { merge: true }
-              );
-              needsCommit = true;
+          needsCommit = true;
+        });
+      } else {
+        // Ensure every authorized user also has an email-indexed lookup doc for rule verification
+        authSnap.forEach((d) => {
+          const u = d.data() as AuthorizedUser;
+          const cleanEmail = (u.email || '').toLowerCase().trim();
+          if (
+            cleanEmail &&
+            cleanEmail !== 'dr.asante@uenr.edu.gh' &&
+            cleanEmail !== 'classrep.it300@uenr.edu.gh' &&
+            ['hod', 'lecturer', 'class_rep'].includes(u.role)
+          ) {
+            let resolvedIds = Array.isArray(u.assignedCourseIds) ? u.assignedCourseIds : undefined;
+            if (u.role === 'lecturer' && !resolvedIds && u.courseAssigned && catalogCourses.length > 0) {
+              const tokens = u.courseAssigned
+                .split(/[,;/|]+/)
+                .map((t) => t.trim().toLowerCase())
+                .filter(Boolean);
+              resolvedIds = catalogCourses
+                .filter((c) =>
+                  tokens.some(
+                    (tok) =>
+                      c.id.toLowerCase() === tok ||
+                      c.code.toLowerCase() === tok ||
+                      c.title.toLowerCase() === tok ||
+                      c.code.toLowerCase().includes(tok) ||
+                      tok.includes(c.code.toLowerCase())
+                  )
+                )
+                .map((c) => c.id);
+              if (resolvedIds.length > 0) {
+                batch.set(doc(db, 'authorizedUsers', u.id), { assignedCourseIds: resolvedIds }, { merge: true });
+              }
             }
-          });
-        }
+
+            batch.set(
+              doc(db, 'authorizedEmails', cleanEmail),
+              {
+                email: cleanEmail,
+                name: u.name || 'Academic Personnel',
+                role: u.role,
+                department: u.department || 'Department of Information Technology',
+                ...(u.courseAssigned !== undefined ? { courseAssigned: u.courseAssigned } : {}),
+                ...(resolvedIds !== undefined ? { assignedCourseIds: resolvedIds } : {}),
+                addedAt: u.addedAt || new Date().toISOString().split('T')[0]
+              },
+              { merge: true }
+            );
+            needsCommit = true;
+          }
+        });
       }
 
       if (needsCommit) {
@@ -754,6 +830,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // Unauthenticated or anonymous QR-check-in sessions NEVER get staff portal access
       if (!user || user.isAnonymous) {
         setVerifiedRole(null);
+        setVerifiedAssignedCourseIds(null);
         setIsAuthorized(false);
         setCurrentUserState(GUEST_USER);
         wipeUnauthorizedState();
@@ -770,6 +847,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       let resolvedRole: UserRole | null = null;
       let resolvedName = user.displayName || (userEmail ? userEmail.split('@')[0] : 'Academic Staff');
       let resolvedDept = 'Department of Information Technology';
+      let resolvedAssignedCourseIds: string[] | null = null;
 
       if (isMasterHod) {
         resolvedRole = 'hod';
@@ -778,11 +856,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         try {
           const emailSnap = await getDoc(doc(db, 'authorizedEmails', userEmail));
           if (emailSnap.exists()) {
-            const data = emailSnap.data() as { role?: UserRole; name?: string; department?: string };
+            const data = emailSnap.data() as {
+              role?: UserRole;
+              name?: string;
+              department?: string;
+              assignedCourseIds?: string[];
+            };
             if (data.role && ['hod', 'lecturer', 'class_rep'].includes(data.role)) {
               resolvedRole = data.role;
               resolvedName = user.displayName || data.name || resolvedName;
               resolvedDept = data.department || resolvedDept;
+              if (data.role === 'lecturer') {
+                resolvedAssignedCourseIds = Array.isArray(data.assignedCourseIds)
+                  ? data.assignedCourseIds.filter((cid) => typeof cid === 'string' && cid.trim().length > 0)
+                  : [];
+              }
             }
           }
         } catch (err) {
@@ -795,12 +883,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           resolvedName = 'Jones Darko';
         }
         setVerifiedRole(resolvedRole);
+        setVerifiedAssignedCourseIds(resolvedAssignedCourseIds);
         setIsAuthorized(true);
         setCurrentUserState({
           name: resolvedName,
           email: user.email || userEmail,
           role: resolvedRole,
           department: resolvedDept,
+          ...(resolvedAssignedCourseIds ? { assignedCourseIds: resolvedAssignedCourseIds } : {}),
           photoURL: user.photoURL || undefined,
           uid: user.uid
         });
@@ -809,6 +899,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } else {
         // Signed-in Google user is NOT on the HOD's authorized registry
         setVerifiedRole(null);
+        setVerifiedAssignedCourseIds(null);
         setIsAuthorized(false);
         setCurrentUserState({
           name: user.displayName || 'Unauthorized Account',
@@ -852,6 +943,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     for (const ticket of queue) {
       const ticketId = ticket.id as string;
+      const ticketCourseId = String(ticket.courseId || '');
+      if (verifiedRole === 'lecturer' && !(verifiedAssignedCourseIds || []).includes(ticketCourseId)) {
+        continue;
+      }
       if (!ticketId || processedQrTicketsRef.current.has(ticketId)) continue;
       processedQrTicketsRef.current.add(ticketId);
 
@@ -859,7 +954,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const res = await checkInStudentWithIndexRef.current(
           String(ticket.indexNumber || ''),
           String(ticket.date || ''),
-          String(ticket.courseId || ''),
+          ticketCourseId,
           ticket.stream ? String(ticket.stream) : undefined,
           {
             gpsVerified: Boolean(ticket.gpsVerified),
@@ -880,7 +975,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         processedQrTicketsRef.current.delete(ticketId);
       }
     }
-  }, [isAuthorized]);
+  }, [isAuthorized, verifiedRole, verifiedAssignedCourseIds]);
 
   // Re-run pending QR tickets once snapshots hydrate
   useEffect(() => {
@@ -891,11 +986,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // STRICTLY GATED Real-time Firestore Listeners: NEVER run unless isAuthorized === true
   useEffect(() => {
-    if (!isAuthorized || !firebaseUser || firebaseUser.isAnonymous) {
+    if (!isAuthorized || !firebaseUser || firebaseUser.isAnonymous || !verifiedRole) {
       return;
     }
 
-    // Hydrate offline fallback cache only for verified authorized users
+    const isLecturer = verifiedRole === 'lecturer';
+    const allowedIds = (verifiedAssignedCourseIds || []).slice(0, 30);
+
+    // Hydrate offline fallback cache (filtered by assigned courses for Lecturers)
     try {
       const savedStudents = localStorage.getItem(STORAGE_KEYS.STUDENTS);
       if (savedStudents) {
@@ -906,16 +1004,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       const offlineSnapshot = loadTimetableFromOfflineStorage();
       if (offlineSnapshot && offlineSnapshot.courses?.length > 0) {
-        setCourses(offlineSnapshot.courses);
-        setTimetable(offlineSnapshot.timetable);
+        setCourses(
+          isLecturer
+            ? offlineSnapshot.courses.filter((c: Course) => allowedIds.includes(c.id))
+            : offlineSnapshot.courses
+        );
+        setTimetable(
+          isLecturer
+            ? offlineSnapshot.timetable.filter((t: TimetableSlot) => allowedIds.includes(t.courseId))
+            : offlineSnapshot.timetable
+        );
       } else {
         const savedCourses = localStorage.getItem(STORAGE_KEYS.COURSES);
-        if (savedCourses) setCourses(JSON.parse(savedCourses));
+        if (savedCourses) {
+          const parsedCourses: Course[] = JSON.parse(savedCourses);
+          setCourses(isLecturer ? parsedCourses.filter((c) => allowedIds.includes(c.id)) : parsedCourses);
+        }
         const savedTimetable = localStorage.getItem(STORAGE_KEYS.TIMETABLE);
-        if (savedTimetable) setTimetable(JSON.parse(savedTimetable));
+        if (savedTimetable) {
+          const parsedSlots: TimetableSlot[] = JSON.parse(savedTimetable);
+          setTimetable(isLecturer ? parsedSlots.filter((t) => allowedIds.includes(t.courseId)) : parsedSlots);
+        }
       }
       const savedAtt = localStorage.getItem(STORAGE_KEYS.ATTENDANCE);
-      if (savedAtt) setAttendanceRecords(JSON.parse(savedAtt));
+      if (savedAtt) {
+        const parsedAtt: AttendanceRecord[] = JSON.parse(savedAtt);
+        setAttendanceRecords(isLecturer ? parsedAtt.filter((r) => allowedIds.includes(r.courseId)) : parsedAtt);
+      }
+      const savedCancelled = localStorage.getItem(STORAGE_KEYS.CANCELLED_CLASSES);
+      if (savedCancelled) {
+        const parsedCancelled: CancelledClass[] = JSON.parse(savedCancelled);
+        setCancelledClasses(isLecturer ? parsedCancelled.filter((c) => allowedIds.includes(c.courseId)) : parsedCancelled);
+      }
       const savedLogs = localStorage.getItem(STORAGE_KEYS.AUDIT_LOGS);
       if (savedLogs) setAuditLogs(JSON.parse(savedLogs));
       const savedAuth = localStorage.getItem(STORAGE_KEYS.AUTHORIZED);
@@ -972,87 +1092,144 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           });
         }
         setIsSyncing(false);
+        setIsCloudConnected(true);
       },
       (error) => {
+        setIsSyncing(false);
         setCloudSyncError('Failed to synchronize students');
         console.warn('[Firestore] Students listener sync notice:', error);
       }
     );
 
-    // 2. Courses Listener
-    const unsubCourses = onSnapshot(
-      collection(db, 'courses'),
-      (snapshot) => {
-        hasCoursesSnapshotRef.current = true;
-        const list: Course[] = [];
-        snapshot.forEach((d) => {
-          const c = d.data() as Course;
-          if (!DUMMY_COURSE_IDS.includes(c.id)) {
-            list.push(c);
-          }
-        });
-        if (list.length > 0) {
-          setCourses(list);
-        } else {
-          setCourses((current) => {
-            if (current.length > 0) {
-              const batch = writeBatch(db);
-              current.forEach((c) => batch.set(doc(db, 'courses', c.id), c));
-              batch.commit().catch(() => {});
-              return current;
-            }
-            return OFFICIAL_L200_COURSES;
-          });
-        }
-      },
-      (error) => {
-        console.warn('[Firestore] Courses listener sync notice:', error);
-      }
-    );
+    // 2. Courses Listener (scoped via `in` query for Lecturers)
+    let unsubCourses = () => {};
+    if (isLecturer && allowedIds.length === 0) {
+      hasCoursesSnapshotRef.current = true;
+      setCourses([]);
+    } else {
+      const coursesQuery = isLecturer
+        ? query(collection(db, 'courses'), where('id', 'in', allowedIds))
+        : collection(db, 'courses');
 
-    // 3. Timetable Listener
-    const unsubTimetable = onSnapshot(
-      collection(db, 'timetable'),
-      (snapshot) => {
-        const list: TimetableSlot[] = [];
-        snapshot.forEach((d) => {
-          const t = d.data() as TimetableSlot;
-          if (!DUMMY_SLOT_IDS.includes(t.id) && !DUMMY_COURSE_IDS.includes(t.courseId)) {
-            list.push(t);
-          }
-        });
-        if (list.length > 0) {
-          setTimetable(list);
-        } else {
-          setTimetable((current) => {
-            if (current.length > 0) {
-              const batch = writeBatch(db);
-              current.forEach((t) => batch.set(doc(db, 'timetable', t.id), t));
-              batch.commit().catch(() => {});
-              return current;
+      unsubCourses = onSnapshot(
+        coursesQuery,
+        (snapshot) => {
+          hasCoursesSnapshotRef.current = true;
+          const list: Course[] = [];
+          snapshot.forEach((d) => {
+            const c = d.data() as Course;
+            if (!DUMMY_COURSE_IDS.includes(c.id)) {
+              list.push(c);
             }
-            return OFFICIAL_L200_TIMETABLE;
           });
+          if (list.length > 0) {
+            setCourses(list);
+          } else if (verifiedRole === 'hod') {
+            setCourses((current) => {
+              if (current.length > 0) {
+                const batch = writeBatch(db);
+                current.forEach((c) => batch.set(doc(db, 'courses', c.id), c));
+                batch.commit().catch(() => {});
+                return current;
+              }
+              return OFFICIAL_L200_COURSES;
+            });
+          } else {
+            setCourses([]);
+          }
+        },
+        (error) => {
+          console.warn('[Firestore] Courses listener sync notice:', error);
         }
-      },
-      (error) => {
-        console.warn('[Firestore] Timetable listener sync notice:', error);
-      }
-    );
+      );
+    }
 
-    // 4. Attendance Listener
-    const unsubAttendance = onSnapshot(
-      collection(db, 'attendance'),
-      (snapshot) => {
-        hasAttendanceSnapshotRef.current = true;
-        const list: AttendanceRecord[] = [];
-        snapshot.forEach((d) => list.push(d.data() as AttendanceRecord));
-        setAttendanceRecords(list);
-      },
-      (error) => {
-        console.warn('[Firestore] Attendance listener sync notice:', error);
-      }
-    );
+    // 3. Timetable Listener (scoped via `in` query for Lecturers)
+    let unsubTimetable = () => {};
+    if (isLecturer && allowedIds.length === 0) {
+      setTimetable([]);
+    } else {
+      const timetableQuery = isLecturer
+        ? query(collection(db, 'timetable'), where('courseId', 'in', allowedIds))
+        : collection(db, 'timetable');
+
+      unsubTimetable = onSnapshot(
+        timetableQuery,
+        (snapshot) => {
+          const list: TimetableSlot[] = [];
+          snapshot.forEach((d) => {
+            const t = d.data() as TimetableSlot;
+            if (!DUMMY_SLOT_IDS.includes(t.id) && !DUMMY_COURSE_IDS.includes(t.courseId)) {
+              list.push(t);
+            }
+          });
+          if (list.length > 0) {
+            setTimetable(list);
+          } else if (verifiedRole === 'hod') {
+            setTimetable((current) => {
+              if (current.length > 0) {
+                const batch = writeBatch(db);
+                current.forEach((t) => batch.set(doc(db, 'timetable', t.id), t));
+                batch.commit().catch(() => {});
+                return current;
+              }
+              return OFFICIAL_L200_TIMETABLE;
+            });
+          } else {
+            setTimetable([]);
+          }
+        },
+        (error) => {
+          console.warn('[Firestore] Timetable listener sync notice:', error);
+        }
+      );
+    }
+
+    // 4. Attendance Listener (scoped via `in` query for Lecturers)
+    let unsubAttendance = () => {};
+    if (isLecturer && allowedIds.length === 0) {
+      hasAttendanceSnapshotRef.current = true;
+      setAttendanceRecords([]);
+    } else {
+      const attendanceQuery = isLecturer
+        ? query(collection(db, 'attendance'), where('courseId', 'in', allowedIds))
+        : collection(db, 'attendance');
+
+      unsubAttendance = onSnapshot(
+        attendanceQuery,
+        (snapshot) => {
+          hasAttendanceSnapshotRef.current = true;
+          const list: AttendanceRecord[] = [];
+          snapshot.forEach((d) => list.push(d.data() as AttendanceRecord));
+          setAttendanceRecords(list);
+        },
+        (error) => {
+          console.warn('[Firestore] Attendance listener sync notice:', error);
+        }
+      );
+    }
+
+    // 4b. Cancelled Classes Listener (scoped via `in` query for Lecturers)
+    let unsubCancelled = () => {};
+    if (isLecturer && allowedIds.length === 0) {
+      setCancelledClasses([]);
+    } else {
+      const cancelledQuery = isLecturer
+        ? query(collection(db, 'cancelledClasses'), where('courseId', 'in', allowedIds))
+        : collection(db, 'cancelledClasses');
+
+      unsubCancelled = onSnapshot(
+        cancelledQuery,
+        (snapshot) => {
+          const list: CancelledClass[] = [];
+          snapshot.forEach((d) => list.push(d.data() as CancelledClass));
+          setCancelledClasses(list);
+        },
+        (error) => {
+          console.warn('[Firestore] Cancelled classes listener sync notice:', error);
+        }
+      );
+    }
 
     // 5. Audit Logs Listener
     const unsubLogs = onSnapshot(
@@ -1070,7 +1247,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     );
 
-    // 6. Authorized Users Listener (with real-time revocation enforcement)
+    // 6. Authorized Users Listener (with real-time revocation & live course-assignment sync)
     const unsubAuthUsers = onSnapshot(
       collection(db, 'authorizedUsers'),
       (snapshot) => {
@@ -1084,21 +1261,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             u.id === 'auth-2' ||
             u.email?.toLowerCase() === 'dr.asante@uenr.edu.gh'
           ) {
-            deleteDoc(doc(db, 'authorizedUsers', d.id)).catch(() => {});
+            if (verifiedRole === 'hod') {
+              deleteDoc(doc(db, 'authorizedUsers', d.id)).catch(() => {});
+            }
             return;
           }
           list.push(u);
         });
         setAuthorizedUsers(list.length > 0 ? list : INITIAL_AUTHORIZED_USERS);
 
-        // If a non-master user was just revoked while logged in, lock them out immediately
+        // If a non-master user was just revoked or had assigned courses updated while logged in, sync immediately
         const activeEmail = (firebaseUser.email || '').toLowerCase().trim();
         if (list.length > 0 && activeEmail && activeEmail !== MASTER_HOD_EMAIL.toLowerCase()) {
-          const stillListed = list.some((u) => u.email.toLowerCase().trim() === activeEmail);
-          if (!stillListed) {
+          const matchedUser = list.find((u) => u.email.toLowerCase().trim() === activeEmail);
+          if (!matchedUser) {
             setVerifiedRole(null);
+            setVerifiedAssignedCourseIds(null);
             setIsAuthorized(false);
             wipeUnauthorizedState();
+          } else if (matchedUser.role === 'lecturer') {
+            const nextIds = Array.isArray(matchedUser.assignedCourseIds)
+              ? matchedUser.assignedCourseIds.filter((cid) => typeof cid === 'string' && cid.trim().length > 0)
+              : [];
+            const nextKey = [...nextIds].sort().join(',');
+            if (nextKey !== verifiedAssignedCourseIdsKey) {
+              setVerifiedAssignedCourseIds(nextIds);
+              setCurrentUserState((prev) => ({ ...prev, assignedCourseIds: nextIds }));
+            }
           }
         }
       },
@@ -1164,13 +1353,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       unsubCourses();
       unsubTimetable();
       unsubAttendance();
+      unsubCancelled();
       unsubLogs();
       unsubAuthUsers();
       unsubSettings();
       unsubGeofence();
       unsubQrCheckIns();
     };
-  }, [isAuthorized, firebaseUser, wipeUnauthorizedState, processPendingQrTickets]);
+  }, [isAuthorized, firebaseUser, verifiedRole, verifiedAssignedCourseIdsKey, wipeUnauthorizedState, processPendingQrTickets]);
 
   // Auth Actions
   const loginWithGoogle = async (forcePrompt = false) => {
@@ -1230,6 +1420,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       role: userData.role,
       department: userData.department || 'Department of Information Technology',
       ...(userData.courseAssigned ? { courseAssigned: userData.courseAssigned } : {}),
+      ...(Array.isArray(userData.assignedCourseIds) ? { assignedCourseIds: userData.assignedCourseIds } : {}),
       ...(userData.level ? { level: userData.level } : {}),
       ...(userData.stream ? { stream: userData.stream } : {}),
       addedAt
@@ -1242,7 +1433,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     await addAuditLog(
       'Authorized Personnel Added',
-      `Assigned by ${currentUser.name} (${currentUser.role.toUpperCase()}): Granted ${newUser.role.toUpperCase()} access to ${newUser.name} (${cleanEmail})`,
+      `Assigned by ${currentUser.name} (${currentUser.role.toUpperCase()}): Granted ${newUser.role.toUpperCase()} access to ${newUser.name} (${cleanEmail})${newUser.courseAssigned ? ` [${newUser.courseAssigned}]` : ''}`,
       'timetable'
     );
 
@@ -1254,10 +1445,70 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           name: newUser.name,
           role: newUser.role,
           department: newUser.department || 'Department of Information Technology',
+          ...(newUser.courseAssigned ? { courseAssigned: newUser.courseAssigned } : {}),
+          ...(Array.isArray(newUser.assignedCourseIds) ? { assignedCourseIds: newUser.assignedCourseIds } : {}),
           addedAt
         });
       } catch (error) {
         handleFirestoreError(error, OperationType.CREATE, `authorizedUsers/${newUser.id}`);
+      }
+    }
+  };
+
+  const updateAuthorizedUser = async (
+    id: string,
+    updates: Partial<Omit<AuthorizedUser, 'id' | 'email' | 'addedAt'>>
+  ) => {
+    if (verifiedRole !== 'hod') {
+      alert('Only the Head of Department (HOD) can update staff assignments.');
+      return;
+    }
+
+    const existing = authorizedUsers.find((u) => u.id === id);
+    if (!existing) return;
+
+    const cleanEmail = existing.email.toLowerCase().trim();
+    const rawUpdated: AuthorizedUser = {
+      ...existing,
+      ...updates,
+      ...(updates.name ? { name: updates.name.trim() } : {})
+    };
+
+    if (rawUpdated.role !== 'lecturer') {
+      delete rawUpdated.assignedCourseIds;
+      delete rawUpdated.courseAssigned;
+    }
+    if (rawUpdated.role !== 'class_rep') {
+      delete rawUpdated.level;
+      delete rawUpdated.stream;
+    }
+
+    const updatedUser = Object.fromEntries(
+      Object.entries(rawUpdated).filter(([, v]) => v !== undefined)
+    ) as AuthorizedUser;
+
+    setAuthorizedUsers((prev) => prev.map((u) => (u.id === id ? updatedUser : u)));
+
+    await addAuditLog(
+      'Personnel Assignment Updated',
+      `Updated ${updatedUser.name} (${cleanEmail}) role=${updatedUser.role.toUpperCase()}${updatedUser.courseAssigned ? ` · Courses: ${updatedUser.courseAssigned}` : ''}`,
+      'security'
+    );
+
+    if (isAuthorized && firebaseUser && !firebaseUser.isAnonymous) {
+      try {
+        await setDoc(doc(db, 'authorizedUsers', id), updatedUser);
+        await setDoc(doc(db, 'authorizedEmails', cleanEmail), {
+          email: cleanEmail,
+          name: updatedUser.name,
+          role: updatedUser.role,
+          department: updatedUser.department || 'Department of Information Technology',
+          ...(updatedUser.courseAssigned !== undefined ? { courseAssigned: updatedUser.courseAssigned } : {}),
+          ...(updatedUser.assignedCourseIds !== undefined ? { assignedCourseIds: updatedUser.assignedCourseIds } : {}),
+          addedAt: updatedUser.addedAt || new Date().toISOString().split('T')[0]
+        });
+      } catch (error) {
+        handleFirestoreError(error, OperationType.UPDATE, `authorizedUsers/${id}`);
       }
     }
   };
@@ -1768,8 +2019,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return count;
   };
 
-  // Course Actions
+  // Course Actions (HOD only)
   const addCourse = async (courseData: Omit<Course, 'id'>) => {
+    if (verifiedRole !== 'hod') {
+      alert('Only the Head of Department (HOD) can add department courses.');
+      return;
+    }
     const newCourse: Course = {
       ...courseData,
       id: `crs-${Date.now()}`
@@ -1787,6 +2042,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateCourse = async (id: string, updates: Partial<Course>) => {
+    if (verifiedRole !== 'hod') {
+      alert('Only the Head of Department (HOD) can modify course details.');
+      return;
+    }
     setCourses((prev) => prev.map((c) => (c.id === id ? { ...c, ...updates } : c)));
     await addAuditLog('Course Updated', `Updated course ${updates.code || id}`, 'timetable');
 
@@ -1800,6 +2059,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const removeCourse = async (id: string) => {
+    if (verifiedRole !== 'hod') {
+      alert('Only the Head of Department (HOD) can remove courses.');
+      return;
+    }
     const course = courses.find((c) => c.id === id);
     setCourses((prev) => prev.filter((c) => c.id !== id));
     setTimetable((prev) => prev.filter((t) => t.courseId !== id));
@@ -1817,6 +2080,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const clearAllCourses = async () => {
+    if (verifiedRole !== 'hod') {
+      alert('Only the Head of Department (HOD) can clear all courses.');
+      return;
+    }
     const count = courses.length;
     setCourses([]);
     setTimetable([]);
@@ -1839,8 +2106,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     await addAuditLog('Courses Cleared', `Cleared all ${count} courses and their schedules`, 'timetable');
   };
 
-  // Timetable Actions
+  // Timetable Actions (Lecturers restricted to assigned courses)
   const addTimetableSlot = async (slotData: Omit<TimetableSlot, 'id'>) => {
+    if (verifiedRole === 'lecturer' && !(verifiedAssignedCourseIds || []).includes(slotData.courseId)) {
+      alert('You can only schedule lecture slots for your assigned courses.');
+      return;
+    }
     const newSlot: TimetableSlot = {
       ...slotData,
       id: `tt-${Date.now()}`
@@ -1859,6 +2130,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateTimetableSlot = async (id: string, updates: Partial<TimetableSlot>) => {
+    const existingSlot = timetable.find((t) => t.id === id);
+    if (verifiedRole === 'lecturer') {
+      const targetCourseId = updates.courseId || existingSlot?.courseId || '';
+      if (!existingSlot || !(verifiedAssignedCourseIds || []).includes(existingSlot.courseId) || !(verifiedAssignedCourseIds || []).includes(targetCourseId)) {
+        alert('You can only modify timetable slots for your assigned courses.');
+        return;
+      }
+    }
     setTimetable((prev) => prev.map((t) => (t.id === id ? { ...t, ...updates } : t)));
     await addAuditLog('Timetable Updated', `Modified scheduled lecture slot`, 'timetable');
 
@@ -1872,6 +2151,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const removeTimetableSlot = async (id: string) => {
+    const existingSlot = timetable.find((t) => t.id === id);
+    if (verifiedRole === 'lecturer' && (!existingSlot || !(verifiedAssignedCourseIds || []).includes(existingSlot.courseId))) {
+      alert('You can only remove timetable slots for your assigned courses.');
+      return;
+    }
     setTimetable((prev) => prev.filter((t) => t.id !== id));
     await addAuditLog('Timetable Updated', `Removed class timetable session slot`, 'timetable');
 
@@ -1885,6 +2169,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const clearAllTimetableSlots = async () => {
+    if (verifiedRole !== 'hod') {
+      alert('Only the Head of Department (HOD) can clear the entire timetable.');
+      return;
+    }
     const count = timetable.length;
     setTimetable([]);
     localStorage.removeItem(STORAGE_KEYS.TIMETABLE);
@@ -1907,6 +2195,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     courseData: { code: string; title: string; creditHours?: number; lecturer?: string; department?: string },
     schedule: { dayOfWeek: number; startTime: string; endTime: string; venue: string; stream?: string }
   ) => {
+    if (verifiedRole !== 'hod') {
+      throw new Error('Only the Head of Department (HOD) can create and assign new courses.');
+    }
     let courseId: string;
     const existing = courses.find((c) => c.code.toLowerCase().trim() === courseData.code.toLowerCase().trim());
     if (existing) {
@@ -1962,6 +2253,130 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
+  const getCancellationForSession = useCallback(
+    ({
+      date,
+      courseId,
+      slotId,
+      stream
+    }: {
+      date: string;
+      courseId: string;
+      slotId?: string;
+      stream?: string;
+    }): CancelledClass | undefined => {
+      if (!date || !courseId) return undefined;
+      return cancelledClasses.find((c) => {
+        if (c.date !== date || c.courseId !== courseId) return false;
+        if (slotId && c.timetableSlotId && c.timetableSlotId === slotId) return true;
+        if (!c.stream) return true;
+        if (!stream || stream === 'all' || stream === 'All Streams') return false;
+        return matchAttendanceStream(c.stream, stream);
+      });
+    },
+    [cancelledClasses]
+  );
+
+  const cancelClassSession = async (input: {
+    date: string;
+    courseId: string;
+    timetableSlotId?: string;
+    stream?: string;
+    reason: string;
+    makeupNote?: string;
+  }): Promise<boolean> => {
+    if (verifiedRole === 'class_rep' || currentUser.role === 'class_rep') {
+      alert('Only Course Lecturers or the Head of Department (HOD) can cancel a class session.');
+      return false;
+    }
+    if (verifiedRole === 'lecturer' && !(verifiedAssignedCourseIds || []).includes(input.courseId)) {
+      alert('Access denied: You can only cancel sessions for your assigned courses.');
+      return false;
+    }
+
+    const cleanReason = input.reason.trim().slice(0, 300);
+    if (!cleanReason) return false;
+
+    const normalizedStream =
+      input.stream && input.stream !== 'all' && input.stream !== 'All' && input.stream !== 'All Streams'
+        ? input.stream.trim().slice(0, 40)
+        : undefined;
+    const scopeKey = input.timetableSlotId
+      ? input.timetableSlotId.replace(/[^a-zA-Z0-9_-]/g, '_')
+      : normalizedStream
+      ? normalizedStream.replace(/[^a-zA-Z0-9_-]/g, '_')
+      : 'all';
+    const cancelId = `cancel-${input.date}-${input.courseId}-${scopeKey}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+    const cleanMakeup = input.makeupNote?.trim() ? input.makeupNote.trim().slice(0, 200) : undefined;
+
+    const record: CancelledClass = {
+      id: cancelId,
+      date: input.date,
+      courseId: input.courseId,
+      ...(input.timetableSlotId ? { timetableSlotId: input.timetableSlotId } : {}),
+      ...(normalizedStream ? { stream: normalizedStream } : {}),
+      reason: cleanReason,
+      ...(cleanMakeup ? { makeupNote: cleanMakeup } : {}),
+      cancelledBy: (currentUser.name || 'Academic Staff').slice(0, 120),
+      ...(currentUser.email ? { cancelledByEmail: currentUser.email.slice(0, 120) } : {}),
+      cancelledAt: new Date().toISOString()
+    };
+
+    setCancelledClasses((prev) => {
+      const filtered = prev.filter((c) => c.id !== cancelId);
+      return [...filtered, record];
+    });
+
+    const course = courses.find((c) => c.id === input.courseId);
+    const streamLabel = normalizedStream ? ` [${normalizedStream}]` : '';
+    await addAuditLog(
+      'Class Cancelled',
+      `${course?.code || input.courseId}${streamLabel} on ${input.date} cancelled by ${record.cancelledBy}: ${cleanReason}${cleanMakeup ? ` (Makeup: ${cleanMakeup})` : ''}`,
+      'timetable'
+    );
+
+    if (firebaseUser && !firebaseUser.isAnonymous) {
+      try {
+        await setDoc(doc(db, 'cancelledClasses', cancelId), record);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.WRITE, `cancelledClasses/${cancelId}`);
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const restoreCancelledClass = async (cancelId: string): Promise<boolean> => {
+    if (verifiedRole === 'class_rep' || currentUser.role === 'class_rep') {
+      alert('Only Course Lecturers or the Head of Department (HOD) can restore a cancelled class.');
+      return false;
+    }
+    const target = cancelledClasses.find((c) => c.id === cancelId);
+    if (!target) return false;
+    if (verifiedRole === 'lecturer' && !(verifiedAssignedCourseIds || []).includes(target.courseId)) {
+      alert('Access denied: You can only restore sessions for your assigned courses.');
+      return false;
+    }
+
+    setCancelledClasses((prev) => prev.filter((c) => c.id !== cancelId));
+    const course = courses.find((c) => c.id === target.courseId);
+    await addAuditLog(
+      'Cancelled Class Restored',
+      `Restored ${course?.code || target.courseId} session on ${target.date}`,
+      'timetable'
+    );
+
+    if (firebaseUser && !firebaseUser.isAnonymous) {
+      try {
+        await deleteDoc(doc(db, 'cancelledClasses', cancelId));
+      } catch (error) {
+        handleFirestoreError(error, OperationType.DELETE, `cancelledClasses/${cancelId}`);
+        return false;
+      }
+    }
+    return true;
+  };
+
   const saveAttendance = async (
     date: string,
     courseId: string,
@@ -1971,6 +2386,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     stream?: string,
     gpsVerifiedIds?: string[]
   ) => {
+    if (verifiedRole === 'lecturer' && !(verifiedAssignedCourseIds || []).includes(courseId)) {
+      alert('Access denied: You can only record attendance for your assigned courses.');
+      return;
+    }
+    const activeCancellation = getCancellationForSession({ date, courseId, stream });
+    if (activeCancellation) {
+      alert(`This class session on ${date} was cancelled (${activeCancellation.reason}). Restore the class first if it is holding.`);
+      return;
+    }
     const course = courses.find((c) => c.id === courseId);
     const presentCount = Object.values(records).filter((s) => s === 'present').length;
     const absentCount = Object.values(records).filter((s) => s === 'absent').length;
@@ -2069,6 +2493,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     stream?: string,
     gpsMeta?: { gpsVerified?: boolean; distanceMeters?: number }
   ) => {
+    if (verifiedRole === 'lecturer' && !(verifiedAssignedCourseIds || []).includes(courseId)) {
+      return { success: false, message: 'Access denied: This course is not assigned to your lecturer account.' };
+    }
+    const activeCancellation = getCancellationForSession({ date, courseId, stream });
+    if (activeCancellation) {
+      return {
+        success: false,
+        message: `This class session on ${date} has been cancelled (${activeCancellation.reason}). No attendance is being recorded.`
+      };
+    }
+
     const cleanInput = indexNumber.trim().toUpperCase();
     const normalizedInput = cleanInput.replace(/[^A-Z0-9]/g, '');
 
@@ -2345,7 +2780,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const exportDatabaseJSON = (): string => {
     const dump = {
       app: 'UENR Biometric Course Attendance',
-      databaseId: 'ai-studio-uenrcourseattend-0141d0d1-23f9-4db8-bf59-093984467c04',
+      databaseId: activeFirestoreDatabaseId,
       academicYear: semester.academicYear,
       semester: semester.semester,
       exportedAt: new Date().toISOString(),
@@ -2425,6 +2860,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const loadOfficialL200Timetable = async (overwriteExisting: boolean = false) => {
+    if (verifiedRole !== 'hod') {
+      return { success: false, coursesCount: courses.length, slotsCount: timetable.length };
+    }
     try {
       setIsSyncing(true);
       const batch = writeBatch(db);
@@ -2473,17 +2911,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCourses([]);
     setTimetable([]);
     setAttendanceRecords([]);
+    setCancelledClasses([]);
     setAuthorizedUsers([]);
     clearSensitiveStorage();
   };
+
+  const isLecturerCourseScoped = verifiedRole === 'lecturer';
+
+  const scopedCourses = useMemo(() => {
+    if (!isLecturerCourseScoped) return courses;
+    const allowed = new Set(verifiedAssignedCourseIds || []);
+    return courses.filter((c) => allowed.has(c.id));
+  }, [isLecturerCourseScoped, courses, verifiedAssignedCourseIds]);
+
+  const scopedTimetable = useMemo(() => {
+    if (!isLecturerCourseScoped) return timetable;
+    const allowed = new Set(verifiedAssignedCourseIds || []);
+    return timetable.filter((t) => allowed.has(t.courseId));
+  }, [isLecturerCourseScoped, timetable, verifiedAssignedCourseIds]);
+
+  const scopedAttendanceRecords = useMemo(() => {
+    if (!isLecturerCourseScoped) return attendanceRecords;
+    const allowed = new Set(verifiedAssignedCourseIds || []);
+    return attendanceRecords.filter((r) => allowed.has(r.courseId));
+  }, [isLecturerCourseScoped, attendanceRecords, verifiedAssignedCourseIds]);
+
+  const scopedCancelledClasses = useMemo(() => {
+    if (!isLecturerCourseScoped) return cancelledClasses;
+    const allowed = new Set(verifiedAssignedCourseIds || []);
+    return cancelledClasses.filter((c) => allowed.has(c.courseId));
+  }, [isLecturerCourseScoped, cancelledClasses, verifiedAssignedCourseIds]);
 
   return (
     <AppContext.Provider
       value={{
         students,
-        courses,
-        timetable,
-        attendanceRecords,
+        courses: scopedCourses,
+        timetable: scopedTimetable,
+        attendanceRecords: scopedAttendanceRecords,
+        cancelledClasses: scopedCancelledClasses,
         auditLogs,
         semester,
         activeTab,
@@ -2511,11 +2977,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isCloudConnected,
         isAuthorized,
         verifiedRole,
+        isLecturerCourseScoped,
         authorizedUsers,
         loginWithGoogle,
         logoutUser,
         switchAccount,
         addAuthorizedUser,
+        updateAuthorizedUser,
         removeAuthorizedUser,
         isSyncing,
         cloudSyncError,
@@ -2549,6 +3017,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         saveAttendance,
         unlockAttendance,
         checkInStudentWithIndex,
+        cancelClassSession,
+        restoreCancelledClass,
+        getCancellationForSession,
         geofenceSettings,
         updateGeofenceSettings,
         addAuditLog,

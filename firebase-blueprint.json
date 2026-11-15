@@ -271,6 +271,15 @@
           "description": "Academic department or class level",
           "maxLength": 100
         },
+        "courseAssigned": {
+          "type": "string",
+          "description": "Human-readable summary of assigned courses",
+          "maxLength": 200
+        },
+        "assignedCourseIds": {
+          "type": "array",
+          "description": "List of course document IDs assigned to the lecturer"
+        },
         "addedAt": {
           "type": "string",
           "description": "Date or ISO string when authorized"
@@ -390,6 +399,15 @@
           "type": "string",
           "description": "Department or stream",
           "maxLength": 100
+        },
+        "assignedCourseIds": {
+          "type": "array",
+          "description": "List of course document IDs assigned to the lecturer"
+        },
+        "courseAssigned": {
+          "type": "string",
+          "description": "Human-readable summary of assigned courses",
+          "maxLength": 200
         },
         "addedAt": {
           "type": "string",
@@ -525,6 +543,63 @@
         }
       },
       "required": ["enabled", "campusName", "latitude", "longitude", "radiusMeters", "rollingPinEnabled"]
+    },
+    "CancelledClass": {
+      "title": "CancelledClass",
+      "description": "Date-specific cancelled class session record with reason and optional makeup note",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Cancellation record identifier"
+        },
+        "date": {
+          "type": "string",
+          "description": "Cancelled class date YYYY-MM-DD",
+          "maxLength": 20
+        },
+        "courseId": {
+          "type": "string",
+          "description": "Associated course ID",
+          "maxLength": 128
+        },
+        "timetableSlotId": {
+          "type": "string",
+          "description": "Optional specific timetable slot ID",
+          "maxLength": 128
+        },
+        "stream": {
+          "type": "string",
+          "description": "Optional class division/stream",
+          "maxLength": 40
+        },
+        "reason": {
+          "type": "string",
+          "description": "Reason the class was cancelled",
+          "maxLength": 300
+        },
+        "makeupNote": {
+          "type": "string",
+          "description": "Optional reschedule or makeup class note",
+          "maxLength": 200
+        },
+        "cancelledBy": {
+          "type": "string",
+          "description": "Name of HOD or lecturer who cancelled",
+          "maxLength": 120
+        },
+        "cancelledByEmail": {
+          "type": "string",
+          "description": "Email of HOD or lecturer who cancelled",
+          "maxLength": 120
+        },
+        "cancelledAt": {
+          "type": "string",
+          "description": "ISO timestamp when cancelled",
+          "maxLength": 60
+        }
+      },
+      "required": ["id", "date", "courseId", "reason", "cancelledBy", "cancelledAt"]
     }
   },
   "firestore": {
@@ -567,6 +642,10 @@
     "/qrCheckIns/{ticketId}": {
       "schema": "QrCheckInTicket",
       "description": "Student QR check-in queue isolated by submitter UID and processed by authorized staff"
+    },
+    "/cancelledClasses/{cancelId}": {
+      "schema": "CancelledClass",
+      "description": "Date-specific cancelled lecture records scoped to courses"
     }
   }
 }
