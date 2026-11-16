@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { UserRole } from '../types';
 import {
@@ -18,7 +18,12 @@ import {
   BookOpen,
   GraduationCap,
   AlertTriangle,
-  UserCheck
+  UserCheck,
+  Info,
+  X,
+  Building2,
+  Users,
+  KeyRound
 } from 'lucide-react';
 
 export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -42,6 +47,104 @@ export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }
   const [isDeclineFormOpen, setIsDeclineFormOpen] = useState<boolean>(false);
   const [declineNote, setDeclineNote] = useState<string>('');
   const [pendingActionError, setPendingActionError] = useState<string | null>(null);
+  const [showAboutModal, setShowAboutModal] = useState<boolean>(false);
+  const aboutModalBodyRef = useRef<HTMLDivElement | null>(null);
+
+  // Lock background scroll & support Escape close when About modal is open
+  useEffect(() => {
+    if (!showAboutModal) return;
+
+    const html = document.documentElement;
+    const body = document.body;
+    const prevHtmlOverflow = html.style.overflow;
+    const prevBodyOverflow = body.style.overflow;
+    const prevHtmlOverscroll = html.style.overscrollBehavior;
+    const prevBodyOverscroll = body.style.overscrollBehavior;
+    const prevBodyPaddingRight = body.style.paddingRight;
+
+    const scrollbarWidth = window.innerWidth - html.clientWidth;
+    if (scrollbarWidth > 0) {
+      const computedPadding = parseFloat(window.getComputedStyle(body).paddingRight) || 0;
+      body.style.paddingRight = `${computedPadding + scrollbarWidth}px`;
+    }
+
+    html.style.overflow = 'hidden';
+    body.style.overflow = 'hidden';
+    html.style.overscrollBehavior = 'none';
+    body.style.overscrollBehavior = 'none';
+
+    let lastTouchY = 0;
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowAboutModal(false);
+      }
+    };
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 1) {
+        lastTouchY = e.touches[0].clientY;
+      }
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      const scroller = aboutModalBodyRef.current;
+      if (!scroller || !scroller.contains(e.target as Node)) {
+        e.preventDefault();
+        return;
+      }
+      if (scroller.scrollHeight <= scroller.clientHeight) {
+        e.preventDefault();
+        return;
+      }
+      const currentY = e.touches[0].clientY;
+      const deltaY = lastTouchY - currentY;
+      lastTouchY = currentY;
+      const atTop = scroller.scrollTop <= 0 && deltaY < 0;
+      const atBottom =
+        scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1 && deltaY > 0;
+      if (atTop || atBottom) {
+        e.preventDefault();
+      }
+    };
+
+    const onWheel = (e: WheelEvent) => {
+      const scroller = aboutModalBodyRef.current;
+      if (!scroller || !scroller.contains(e.target as Node)) {
+        e.preventDefault();
+        return;
+      }
+      if (scroller.scrollHeight <= scroller.clientHeight) {
+        e.preventDefault();
+        return;
+      }
+      const atTop = scroller.scrollTop <= 0 && e.deltaY < 0;
+      const atBottom =
+        scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1 && e.deltaY > 0;
+      if (atTop || atBottom) {
+        e.preventDefault();
+      }
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('touchstart', onTouchStart, { passive: true });
+    document.addEventListener('touchmove', onTouchMove, { passive: false });
+    document.addEventListener('wheel', onWheel, { passive: false });
+
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('touchstart', onTouchStart);
+      document.removeEventListener('touchmove', onTouchMove);
+      document.removeEventListener('wheel', onWheel);
+
+      html.style.overflow = prevHtmlOverflow;
+      body.style.overflow = prevBodyOverflow;
+      html.style.overscrollBehavior = prevHtmlOverscroll;
+      body.style.overscrollBehavior = prevBodyOverscroll;
+      body.style.paddingRight = prevBodyPaddingRight;
+    };
+  }, [showAboutModal]);
 
   // 1. Authorized & confirmed verified personnel only
   if (firebaseUser && !firebaseUser.isAnonymous && isAuthorized) {
@@ -473,7 +576,17 @@ export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }
             </div>
           </div>
 
-          <div className="flex items-center gap-2.5 shrink-0">
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setShowAboutModal(true)}
+              className="px-3 py-2 rounded-xl bg-black/20 hover:bg-black/35 border border-white/15 text-slate-100 hover:text-white text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer"
+              title="About UENR Attendance Portal"
+            >
+              <Info className="w-3.5 h-3.5 text-emerald-300" />
+              <span>About</span>
+            </button>
+
             <button
               type="button"
               onClick={toggleTheme}
@@ -629,9 +742,192 @@ export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }
       </main>
 
       {/* Public Footer */}
-      <footer className="border-t border-slate-200 dark:border-slate-800 py-4 text-center text-[11px] text-slate-500 dark:text-slate-400">
-        University of Energy and Natural Resources · Department of Information Technology &amp; Decision Sciences
+      <footer className="border-t border-slate-200 dark:border-slate-800 py-4 px-4 text-center text-[11px] text-slate-500 dark:text-slate-400">
+        <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
+          <span>
+            University of Energy and Natural Resources · Department of Information Technology &amp; Decision Sciences
+          </span>
+          <button
+            type="button"
+            onClick={() => setShowAboutModal(true)}
+            className="inline-flex items-center gap-1 font-bold text-[#007c82] dark:text-teal-400 hover:underline cursor-pointer"
+          >
+            <Info className="w-3.5 h-3.5" />
+            <span>About This Portal</span>
+          </button>
+        </div>
       </footer>
+
+      {/* About Portal Modal */}
+      {showAboutModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/65 backdrop-blur-xs animate-in fade-in duration-150 touch-none overscroll-none"
+          onClick={() => setShowAboutModal(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="about-portal-title"
+        >
+          <div
+            className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden overscroll-contain"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="bg-gradient-to-r from-[#00243a] via-[#003b5c] to-[#007c82] p-5 sm:p-6 text-white flex items-start justify-between gap-4">
+              <div className="flex items-start gap-3.5 min-w-0">
+                <div className="w-11 h-11 rounded-2xl bg-white p-1.5 shadow-sm border border-emerald-400/40 flex items-center justify-center shrink-0">
+                  <img
+                    src="/assets/uenr_logo.jpg"
+                    alt="UENR Emblem"
+                    className="w-full h-full object-contain"
+                    onError={(e) => {
+                      (e.target as HTMLElement).style.display = 'none';
+                    }}
+                  />
+                </div>
+                <div className="min-w-0">
+                  <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-white/15 border border-white/20 text-emerald-200">
+                    <ShieldCheck className="w-3 h-3" />
+                    UENR ITDS Academic System
+                  </span>
+                  <h3 id="about-portal-title" className="text-lg sm:text-xl font-black mt-1.5">
+                    About UENR Attendance Portal
+                  </h3>
+                  <p className="text-xs text-slate-200 mt-0.5">
+                    Department of Information Technology &amp; Decision Sciences · Sunyani
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowAboutModal(false)}
+                className="p-1.5 rounded-xl bg-black/20 hover:bg-black/35 text-slate-200 hover:text-white transition-colors cursor-pointer shrink-0"
+                aria-label="Close About dialog"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Scrollable Body */}
+            <div
+              ref={aboutModalBodyRef}
+              className="p-5 sm:p-6 overflow-y-auto overscroll-contain touch-pan-y space-y-5 text-xs text-slate-600 dark:text-slate-300 leading-relaxed"
+            >
+              {/* Mission & Overview */}
+              <div className="space-y-1.5">
+                <h4 className="font-bold text-slate-900 dark:text-white text-xs uppercase tracking-wider flex items-center gap-1.5">
+                  <Building2 className="w-4 h-4 text-[#007c82] dark:text-teal-400" />
+                  <span>Purpose &amp; Institutional Compliance</span>
+                </h4>
+                <p>
+                  This portal is the official digital attendance and academic compliance platform built for the Department of Information Technology &amp; Decision Sciences at the University of Energy and Natural Resources (UENR). It replaces paper sign-in sheets with biometric verification, GPS-geofenced classroom QR check-ins, and automated <strong>75% examination eligibility tracking</strong>.
+                </p>
+              </div>
+
+              {/* Who Uses It */}
+              <div className="space-y-2.5">
+                <h4 className="font-bold text-slate-900 dark:text-white text-xs uppercase tracking-wider flex items-center gap-1.5">
+                  <Users className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                  <span>Who Uses This Portal</span>
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700/80">
+                    <div className="font-bold text-slate-900 dark:text-white">Head of Department (HOD)</div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                      Supervises department compliance, approves staff access, and reviews immutable HOD activity logs.
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700/80">
+                    <div className="font-bold text-slate-900 dark:text-white">Course Lecturers</div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                      Run biometric or live QR attendance for assigned courses, manage cancellations, and appoint Class Reps.
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700/80">
+                    <div className="font-bold text-slate-900 dark:text-white">Class Representatives</div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                      Assist with in-class attendance roll calls for their authorized class division.
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-teal-50/70 dark:bg-teal-950/30 border border-teal-200 dark:border-teal-800/60">
+                    <div className="font-bold text-[#003b5c] dark:text-teal-300">Students (QR Check-In)</div>
+                    <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5">
+                      No staff sign-in needed—simply scan the live classroom projector QR code and rolling PIN inside the hall.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* 3-Step First-Time Staff Sign-In */}
+              <div className="space-y-2.5">
+                <h4 className="font-bold text-slate-900 dark:text-white text-xs uppercase tracking-wider flex items-center gap-1.5">
+                  <KeyRound className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                  <span>How First-Time Staff Access Works</span>
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/70">
+                    <span className="text-[10px] font-black uppercase text-[#007c82] dark:text-teal-400">Step 1</span>
+                    <div className="font-bold text-slate-900 dark:text-white mt-0.5">Registry Approval</div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                      Your HOD (or Lecturer for Class Reps) adds your Google email to the authorized roster.
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/70">
+                    <span className="text-[10px] font-black uppercase text-[#007c82] dark:text-teal-400">Step 2</span>
+                    <div className="font-bold text-slate-900 dark:text-white mt-0.5">Google Sign-In</div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                      Open the invite link or click Staff Sign In using that approved Google account.
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/70">
+                    <span className="text-[10px] font-black uppercase text-[#007c82] dark:text-teal-400">Step 3</span>
+                    <div className="font-bold text-slate-900 dark:text-white mt-0.5">Confirm Role</div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                      Review your role and assigned courses once at the gate to activate full access.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Privacy & Attribution */}
+              <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/80 space-y-1.5">
+                <div className="flex items-center gap-1.5 font-bold text-slate-800 dark:text-slate-200">
+                  <Lock className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                  <span>Data Privacy &amp; Departmental Ownership</span>
+                </div>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  Zero student names, index numbers, timetables, or attendance logs are accessible prior to verified sign-in. Developed by <strong>Jones Darko</strong> for the UENR IT Department · Support &amp; access requests:{' '}
+                  <span className="font-mono text-[#007c82] dark:text-teal-400">jonesdarko345@gmail.com</span>.
+                </p>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-slate-100 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/70 flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => setShowAboutModal(false)}
+                className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-bold transition-colors cursor-pointer"
+              >
+                Close
+              </button>
+
+              <button
+                type="button"
+                disabled={isSigningIn}
+                onClick={() => {
+                  setShowAboutModal(false);
+                  handleGoogleSignIn();
+                }}
+                className="px-4 py-2 rounded-xl bg-[#003b5c] hover:bg-[#004e75] text-white text-xs font-bold transition-colors shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+              >
+                <Lock className="w-3.5 h-3.5 text-emerald-300" />
+                <span>Staff Sign In</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

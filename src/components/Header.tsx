@@ -192,7 +192,7 @@ export const Header: React.FC = () => {
       style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}
     >
       <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between gap-2 sm:gap-4 min-h-[60px] h-16 sm:h-20">
+        <div className="flex items-center justify-between gap-2 lg:gap-4 min-h-[60px] h-16">
           
           {/* Logo & School Title */}
           <button
@@ -201,11 +201,11 @@ export const Header: React.FC = () => {
               if (isRoleMenuOpen) setIsRoleMenuOpen(false);
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
-            className="flex items-center gap-2 sm:gap-3 text-left focus:outline-none group cursor-pointer min-w-0 flex-1 lg:flex-none min-h-[44px] py-1 active:scale-95 transition-transform duration-150"
+            className="flex items-center gap-2 sm:gap-2.5 text-left focus:outline-none group cursor-pointer min-w-0 flex-1 lg:flex-none min-h-[40px] py-1 active:scale-95 transition-transform duration-150 shrink-0"
             title="Return to Dashboard"
             aria-label="Return to UENR Attendance Dashboard"
           >
-            <div className="relative flex-shrink-0 w-9 h-9 sm:w-11 sm:h-11 md:w-12 md:h-12 rounded-xl bg-white p-1 shadow-sm border border-emerald-500/30 flex items-center justify-center overflow-hidden group-hover:scale-105 transition-transform duration-150">
+            <div className="relative flex-shrink-0 w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-white p-1 shadow-sm border border-emerald-500/30 flex items-center justify-center overflow-hidden group-hover:scale-105 transition-transform duration-150">
               <img
                 src="/assets/uenr_logo.jpg"
                 alt="UENR Logo"
@@ -216,17 +216,17 @@ export const Header: React.FC = () => {
               />
             </div>
             <div className="flex flex-col min-w-0">
-              <span className="font-extrabold text-sm sm:text-lg md:text-xl tracking-tight text-white group-hover:text-emerald-300 transition-colors truncate">
+              <span className="font-extrabold text-sm sm:text-base xl:text-lg tracking-tight text-white group-hover:text-emerald-300 transition-colors truncate whitespace-nowrap">
                 UENR Attendance
               </span>
-              <span className="text-[10px] sm:text-xs text-slate-300 font-medium truncate hidden xs:inline sm:inline">
+              <span className="text-[11px] text-slate-300 font-medium truncate hidden sm:inline lg:hidden 2xl:inline">
                 Faculty & Class Rep Portal
               </span>
             </div>
           </button>
 
           {/* Navigation Links (Desktop) */}
-          <nav className="hidden lg:flex items-center space-x-1">
+          <nav className="hidden lg:flex items-center gap-0.5 xl:gap-1 bg-black/20 p-1 rounded-xl border border-white/10">
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeTab === item.id;
@@ -234,18 +234,18 @@ export const Header: React.FC = () => {
                 <button
                   key={item.id}
                   onClick={() => setActiveTab(item.id)}
-                  className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-semibold transition-all duration-150 cursor-pointer ${
+                  className={`flex items-center gap-1.5 px-2.5 xl:px-3 py-1.5 rounded-lg text-xs xl:text-[13px] font-semibold transition-all duration-150 cursor-pointer whitespace-nowrap ${
                     isActive
                       ? item.isHodExclusive
-                        ? 'bg-purple-600 text-white shadow-sm ring-1 ring-purple-300/40'
-                        : 'bg-[#007c82] text-white shadow-sm ring-1 ring-white/20'
+                        ? 'bg-purple-600 text-white shadow-sm'
+                        : 'bg-[#007c82] text-white shadow-sm'
                       : item.isHodExclusive
-                      ? 'text-purple-200 hover:text-white hover:bg-purple-500/25 border border-purple-400/25'
+                      ? 'text-purple-200 hover:text-white hover:bg-purple-500/20'
                       : 'text-slate-200 hover:text-white hover:bg-white/10'
                   }`}
                 >
                   <Icon
-                    className={`w-4 h-4 ${
+                    className={`w-3.5 h-3.5 xl:w-4 xl:h-4 shrink-0 ${
                       isActive
                         ? item.isHodExclusive
                           ? 'text-purple-200'
@@ -255,58 +255,47 @@ export const Header: React.FC = () => {
                         : 'text-slate-300'
                     }`}
                   />
-                  {item.label}
+                  <span>{item.label}</span>
                 </button>
               );
             })}
           </nav>
 
           {/* Right Action & Profile Area */}
-          <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
-            {/* Network & Cloud Status Indicator */}
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            {/* Compact Network & Cloud Status Indicator */}
             {!isOnline ? (
               <div
-                className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1 rounded-lg bg-amber-500/25 border border-amber-400/50 text-[11px] font-bold text-amber-200 shrink-0 whitespace-nowrap"
+                className="flex items-center gap-1 px-2 py-1.5 rounded-xl bg-amber-500/25 border border-amber-400/50 text-[11px] font-bold text-amber-200 shrink-0 whitespace-nowrap"
                 title="Device is offline. Showing locally saved timetable and data."
               >
                 <WifiOff className="w-3.5 h-3.5 text-amber-300 shrink-0" />
-                <span className="sm:hidden">Offline</span>
-                <span className="hidden sm:inline">Offline (Cached)</span>
+                <span>Offline</span>
               </div>
             ) : isPoorConnection ? (
               <div
-                className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-sky-500/20 border border-sky-400/40 text-[11px] font-semibold text-sky-200"
+                className="hidden sm:flex items-center justify-center w-9 h-9 rounded-xl bg-sky-500/20 border border-sky-400/40 text-sky-200 shrink-0"
                 title="Poor connection detected. High-speed local cache active."
               >
-                <Smartphone className="w-3.5 h-3.5 text-sky-300" />
-                <span className="hidden md:inline">Slow Net (Cached)</span>
+                <Smartphone className="w-4 h-4 text-sky-300" />
               </div>
             ) : (
               <div
-                className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-black/25 border border-white/15 text-[11px] font-medium text-slate-200"
-                title={isCloudConnected ? "Cloud sync active" : "Connecting to database"}
+                className="hidden sm:flex items-center justify-center w-9 h-9 rounded-xl bg-black/25 border border-white/15 shrink-0"
+                title={isSyncing ? 'Syncing with Firestore...' : isCloudConnected ? 'Cloud sync active' : 'Connecting to database'}
               >
                 {isSyncing ? (
-                  <RefreshCw className="w-3.5 h-3.5 text-amber-400 animate-spin" />
+                  <RefreshCw className="w-4 h-4 text-amber-400 animate-spin" />
                 ) : isCloudConnected ? (
-                  <span className="relative flex h-2 w-2">
+                  <span className="relative flex h-2.5 w-2.5">
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-400"></span>
                   </span>
                 ) : (
-                  <Cloud className="w-3.5 h-3.5 text-slate-400" />
+                  <Cloud className="w-4 h-4 text-slate-400" />
                 )}
-                <span className="hidden md:inline">
-                  {isSyncing ? 'Syncing...' : isCloudConnected ? 'Cloud Active' : 'Connecting'}
-                </span>
               </div>
             )}
-
-            {/* Today's Date Pill */}
-            <div className="hidden xl:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/10 text-[11px] font-medium text-slate-200 border border-white/15">
-              <Clock className="w-3.5 h-3.5 text-emerald-400" />
-              <span>{todayStr}</span>
-            </div>
 
             {/* Global Theme Toggle Button */}
             <button
@@ -436,6 +425,10 @@ export const Header: React.FC = () => {
                               • Local Session
                             </span>
                           )}
+                        </div>
+                        <div className="mt-1.5 flex items-center gap-1.5 text-[10px] text-slate-400 dark:text-slate-500 font-medium">
+                          <Clock className="w-3 h-3 text-teal-600 dark:text-teal-400" />
+                          <span>{todayStr}</span>
                         </div>
                       </div>
                     </div>
