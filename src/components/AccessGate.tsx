@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
+import { UserRole } from '../types';
 import {
   ShieldCheck,
   ShieldAlert,
@@ -11,7 +12,13 @@ import {
   Sun,
   Moon,
   RefreshCw,
-  MapPin
+  MapPin,
+  CheckCircle2,
+  MailCheck,
+  BookOpen,
+  GraduationCap,
+  AlertTriangle,
+  UserCheck
 } from 'lucide-react';
 
 export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -19,6 +26,9 @@ export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }
     firebaseUser,
     isAuthLoading,
     isAuthorized,
+    pendingAuthorization,
+    acceptPendingAuthorization,
+    declinePendingAuthorization,
     loginWithGoogle,
     logoutUser,
     switchAccount,
@@ -28,8 +38,12 @@ export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }
 
   const [authError, setAuthError] = useState<string | null>(null);
   const [isSigningIn, setIsSigningIn] = useState<boolean>(false);
+  const [isConfirmingAccess, setIsConfirmingAccess] = useState<boolean>(false);
+  const [isDeclineFormOpen, setIsDeclineFormOpen] = useState<boolean>(false);
+  const [declineNote, setDeclineNote] = useState<string>('');
+  const [pendingActionError, setPendingActionError] = useState<string | null>(null);
 
-  // 1. Authorized verified personnel only
+  // 1. Authorized & confirmed verified personnel only
   if (firebaseUser && !firebaseUser.isAnonymous && isAuthorized) {
     return <>{children}</>;
   }
@@ -54,8 +68,8 @@ export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }
     );
   }
 
-  const formatAuthErrorMessage = (err: any): string | null => {
-    const code = err?.code || '';
+  const formatAuthErrorMessage = (err: unknown): string | null => {
+    const code = (err as { code?: string })?.code || '';
     if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
       return null;
     }
@@ -71,18 +85,297 @@ export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }
     return 'Sign-in could not be completed. Please allow popups and try again.';
   };
 
+  const formatRoleLabel = (role: UserRole): string => {
+    if (role === 'hod') return 'Head of Department (HOD)';
+    if (role === 'class_rep') return 'Class Representative';
+    return 'Course Lecturer';
+  };
+
   const handleGoogleSignIn = async () => {
     setAuthError(null);
     setIsSigningIn(true);
     try {
       await loginWithGoogle(true);
-    } catch (err: any) {
+    } catch (err: unknown) {
       const msg = formatAuthErrorMessage(err);
       if (msg) setAuthError(msg);
     } finally {
       setIsSigningIn(false);
     }
   };
+
+  const handleAcceptAuthorization = async () => {
+    setPendingActionError(null);
+    setIsConfirmingAccess(true);
+    try {
+      await acceptPendingAuthorization();
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : 'Could not activate your portal access. Please verify your internet connection and try again.';
+      setPendingActionError(message);
+    } finally {
+      setIsConfirmingAccess(false);
+    }
+  };
+
+  const handleDeclineAuthorization = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPendingActionError(null);
+    setIsConfirmingAccess(true);
+    try {
+      await declinePendingAuthorization(declineNote);
+      setIsDeclineFormOpen(false);
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : 'Could not submit your response. Please verify your internet connection and try again.';
+      setPendingActionError(message);
+    } finally {
+      setIsConfirmingAccess(false);
+    }
+  };
+
+  // 2b. Two-Step Confirmation Screen: HOD/Lecturer approved them, awaiting invitee's own approval
+  if (firebaseUser && !firebaseUser.isAnonymous && !isAuthorized && pendingAuthorization) {
+    const isDeclined = pendingAuthorization.status === 'declined';
+    const roleLabel = formatRoleLabel(pendingAuthorization.role);
+    const approverLabel =
+      pendingAuthorization.invitedByName ||
+      (pendingAuthorization.role === 'class_rep' ? 'Course Lecturer / HOD' : 'Head of Department');
+
+    return (
+      <div className="min-h-screen bg-[#f6fafb] dark:bg-slate-950 flex flex-col items-center justify-center p-4 sm:p-6 text-slate-900 dark:text-slate-100 transition-colors">
+        <div className="max-w-lg w-full bg-white dark:bg-slate-900 rounded-3xl shadow-2xl overflow-hidden border border-slate-200 dark:border-slate-800">
+          <div
+            className={`p-6 sm:p-7 text-white ${
+              isDeclined
+                ? 'bg-gradient-to-r from-amber-700 via-amber-600 to-orange-600'
+                : 'bg-gradient-to-r from-[#00243a] via-[#003b5c] to-[#007c82]'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-3 mb-4">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/15 border border-white/25 text-[11px] font-bold tracking-wide uppercase">
+                {isDeclined ? (
+                  <>
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-200" />
+                    <span>Mismatch Reported · Awaiting Review</span>
+                  </>
+                ) : (
+                  <>
+                    <MailCheck className="w-3.5 h-3.5 text-emerald-300" />
+                    <span>HOD Approval Received · Step 2 of 2</span>
+                  </>
+                )}
+              </span>
+              <button
+                type="button"
+                onClick={toggleTheme}
+                className="w-8 h-8 rounded-xl bg-black/20 hover:bg-black/35 border border-white/15 flex items-center justify-center cursor-pointer"
+                title={isDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+              >
+                {isDarkMode ? <Sun className="w-4 h-4 text-amber-300" /> : <Moon className="w-4 h-4 text-sky-100" />}
+              </button>
+            </div>
+
+            <div className="flex items-start gap-3.5">
+              <div className="w-12 h-12 rounded-2xl bg-white/15 border border-white/25 flex items-center justify-center shrink-0">
+                <UserCheck className="w-6 h-6 text-[#8dc63f]" />
+              </div>
+              <div>
+                <h2 className="text-xl font-black tracking-tight">
+                  {isDeclined
+                    ? 'Authorization Assignment Flagged'
+                    : 'Confirm Your Departmental Authorization'}
+                </h2>
+                <p className="text-xs text-slate-100/90 mt-1 leading-relaxed">
+                  {approverLabel} has authorized your Google account in the UENR ITDS Attendance Portal. Review your assignment details below and approve to activate access.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="p-6 sm:p-7 space-y-5">
+            {/* Assignment Summary Box */}
+            <div className="bg-slate-50 dark:bg-slate-800/70 rounded-2xl p-4 sm:p-5 border border-slate-200 dark:border-slate-700 space-y-3 text-xs">
+              <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-200 dark:border-slate-700">
+                <div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 font-semibold">Authorized Personnel</p>
+                  <p className="text-sm font-black text-slate-900 dark:text-white mt-0.5">
+                    {pendingAuthorization.name}
+                  </p>
+                  <p className="text-[11px] font-mono text-slate-600 dark:text-slate-300">
+                    {pendingAuthorization.email}
+                  </p>
+                </div>
+                <span className="px-2.5 py-1 rounded-full bg-teal-50 dark:bg-teal-950/60 text-[#007c82] dark:text-teal-300 border border-teal-200 dark:border-teal-800 font-bold text-[11px] shrink-0">
+                  {roleLabel}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Approved By</p>
+                  <p className="font-bold text-slate-800 dark:text-slate-200 mt-0.5">{approverLabel}</p>
+                  {pendingAuthorization.invitedBy && (
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono truncate">
+                      {pendingAuthorization.invitedBy}
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Department</p>
+                  <p className="font-bold text-slate-800 dark:text-slate-200 mt-0.5">
+                    {pendingAuthorization.department || 'Department of Information Technology'}
+                  </p>
+                </div>
+              </div>
+
+              {pendingAuthorization.role === 'lecturer' && (
+                <div className="pt-2 border-t border-slate-200 dark:border-slate-700">
+                  <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 flex items-center gap-1.5 mb-1">
+                    <BookOpen className="w-3.5 h-3.5 text-[#007c82] dark:text-teal-400" />
+                    <span>Assigned Course Scope</span>
+                  </p>
+                  <p className="font-bold text-slate-900 dark:text-white leading-relaxed">
+                    {pendingAuthorization.courseAssigned?.trim() ||
+                      'Course schedule awaiting HOD assignment'}
+                  </p>
+                </div>
+              )}
+
+              {pendingAuthorization.role === 'class_rep' && (
+                <div className="pt-2 border-t border-slate-200 dark:border-slate-700">
+                  <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 flex items-center gap-1.5 mb-1">
+                    <GraduationCap className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                    <span>Assigned Class Division</span>
+                  </p>
+                  <p className="font-bold text-slate-900 dark:text-white">
+                    {[pendingAuthorization.level, pendingAuthorization.stream].filter(Boolean).join(' · ') ||
+                      'Departmental Class Roll Call Assistant'}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {isDeclined && (
+              <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-xs text-amber-900 dark:text-amber-200 space-y-1">
+                <p className="font-bold">You previously flagged or declined this assignment.</p>
+                {pendingAuthorization.responseNote && (
+                  <p className="text-amber-800 dark:text-amber-300">
+                    Recorded note: "{pendingAuthorization.responseNote}"
+                  </p>
+                )}
+                <p className="text-[11px] opacity-90">
+                  Once the HOD updates your details—or if everything above is now accurate—click Approve &amp; Activate Portal Access below.
+                </p>
+              </div>
+            )}
+
+            {pendingActionError && (
+              <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-xs font-semibold text-rose-700 dark:text-rose-300">
+                {pendingActionError}
+              </div>
+            )}
+
+            {isDeclineFormOpen ? (
+              <form onSubmit={handleDeclineAuthorization} className="space-y-3 bg-slate-50 dark:bg-slate-800/60 p-4 rounded-2xl border border-slate-200 dark:border-slate-700">
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-200">
+                  Reason or Course Mismatch Note (visible to HOD)
+                </label>
+                <textarea
+                  value={declineNote}
+                  onChange={(e) => setDeclineNote(e.target.value)}
+                  rows={2}
+                  maxLength={300}
+                  placeholder="e.g. I teach INFT 255 rather than INFT 253, please reassign before activation."
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-xs focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    disabled={isConfirmingAccess}
+                    onClick={() => setIsDeclineFormOpen(false)}
+                    className="px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-slate-700 cursor-pointer"
+                  >
+                    Back
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isConfirmingAccess}
+                    className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shadow-sm cursor-pointer disabled:opacity-60"
+                  >
+                    {isConfirmingAccess ? 'Submitting...' : 'Submit Decline / Mismatch'}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <div className="space-y-2.5">
+                <button
+                  type="button"
+                  disabled={isConfirmingAccess}
+                  onClick={handleAcceptAuthorization}
+                  className="w-full py-3.5 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>
+                    {isConfirmingAccess
+                      ? 'Activating Portal Access...'
+                      : 'Approve & Activate Portal Access'}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isConfirmingAccess}
+                  onClick={() => setIsDeclineFormOpen(true)}
+                  className="w-full py-2.5 px-4 rounded-xl bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 dark:hover:bg-amber-950/70 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 font-bold text-xs transition-all cursor-pointer disabled:opacity-60"
+                >
+                  Flag Mismatch / Decline Assignment
+                </button>
+              </div>
+            )}
+
+            <div className="pt-3 border-t border-slate-100 dark:border-slate-800 grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button
+                type="button"
+                disabled={isSigningIn || isConfirmingAccess}
+                onClick={async () => {
+                  setAuthError(null);
+                  setIsSigningIn(true);
+                  try {
+                    await switchAccount();
+                  } catch (err: unknown) {
+                    const msg = formatAuthErrorMessage(err);
+                    if (msg) setAuthError(msg);
+                  } finally {
+                    setIsSigningIn(false);
+                  }
+                }}
+                className="py-2.5 px-3 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-[11px] transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSigningIn ? 'animate-spin' : ''}`} />
+                <span>Switch Account</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={isConfirmingAccess}
+                onClick={() => logoutUser()}
+                className="py-2.5 px-3 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-[11px] transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Sign Out</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // 3. Signed in with a Google account that is NOT authorized by HOD/Lecturer
   if (firebaseUser && !firebaseUser.isAnonymous && !isAuthorized) {
@@ -95,7 +388,7 @@ export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }
             </div>
             <h2 className="text-xl font-bold">Access Unauthorized</h2>
             <p className="text-xs text-rose-100 mt-1">
-              Restricted to UENR HODs, Lecturers & Class Representatives
+              Restricted to UENR HODs, Lecturers &amp; Class Representatives
             </p>
           </div>
 
@@ -125,7 +418,7 @@ export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }
                   setIsSigningIn(true);
                   try {
                     await switchAccount();
-                  } catch (err: any) {
+                  } catch (err: unknown) {
                     const msg = formatAuthErrorMessage(err);
                     if (msg) setAuthError(msg);
                   } finally {
@@ -342,4 +635,3 @@ export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }
     </div>
   );
 };
-

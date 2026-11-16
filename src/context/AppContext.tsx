@@ -115,13 +115,17 @@ interface AppContextType {
   isCloudConnected: boolean;
   isAuthorized: boolean;
   verifiedRole: UserRole | null;
+  pendingAuthorization: AuthorizedUser | null;
   isLecturerCourseScoped: boolean;
   authorizedUsers: AuthorizedUser[];
   loginWithGoogle: (forcePrompt?: boolean) => Promise<void>;
   logoutUser: () => Promise<void>;
   switchAccount: () => Promise<void>;
-  addAuthorizedUser: (user: Omit<AuthorizedUser, 'id' | 'addedAt'>) => Promise<void>;
-  updateAuthorizedUser: (id: string, updates: Partial<Omit<AuthorizedUser, 'id' | 'email' | 'addedAt'>>) => Promise<void>;
+  acceptPendingAuthorization: () => Promise<boolean>;
+  declinePendingAuthorization: (note?: string) => Promise<boolean>;
+  markAuthorizationEmailSent: (emailOrId: string) => Promise<void>;
+  addAuthorizedUser: (user: Omit<AuthorizedUser, 'id' | 'addedAt'>) => Promise<AuthorizedUser | null>;
+  updateAuthorizedUser: (id: string, updates: Partial<Omit<AuthorizedUser, 'id' | 'email' | 'addedAt'>>) => Promise<AuthorizedUser | null>;
   removeAuthorizedUser: (id: string) => Promise<void>;
 
   // Sync state
@@ -296,6 +300,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [verifiedRole, setVerifiedRole] = useState<UserRole | null>(null);
   const [verifiedAssignedCourseIds, setVerifiedAssignedCourseIds] = useState<string[] | null>(null);
   const [isAuthorized, setIsAuthorized] = useState<boolean>(false);
+  const [pendingAuthorization, setPendingAuthorization] = useState<AuthorizedUser | null>(null);
   const [currentUser, setCurrentUserState] = useState<CurrentUser>(GUEST_USER);
 
   const verifiedAssignedCourseIdsKey = useMemo(
@@ -802,6 +807,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 department: u.department || 'Department of Information Technology',
                 ...(u.courseAssigned !== undefined ? { courseAssigned: u.courseAssigned } : {}),
                 ...(resolvedIds !== undefined ? { assignedCourseIds: resolvedIds } : {}),
+                ...(u.level !== undefined ? { level: u.level } : {}),
+                ...(u.stream !== undefined ? { stream: u.stream } : {}),
+                ...(u.status !== undefined ? { status: u.status } : {}),
+                ...(u.invitedBy !== undefined ? { invitedBy: u.invitedBy } : {}),
+                ...(u.invitedByName !== undefined ? { invitedByName: u.invitedByName } : {}),
+                ...(u.invitedAt !== undefined ? { invitedAt: u.invitedAt } : {}),
+                ...(u.acceptedAt !== undefined ? { acceptedAt: u.acceptedAt } : {}),
+                ...(u.declinedAt !== undefined ? { declinedAt: u.declinedAt } : {}),
+                ...(u.responseNote !== undefined ? { responseNote: u.responseNote } : {}),
+                ...(u.lastEmailSentAt !== undefined ? { lastEmailSentAt: u.lastEmailSentAt } : {}),
+                userDocId: u.id,
                 addedAt: u.addedAt || new Date().toISOString().split('T')[0]
               },
               { merge: true }
@@ -824,7 +840,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Listen to Firebase Auth state & strictly verify authorization before exposing any data
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
       setFirebaseUser(user);
 
       // Unauthenticated or anonymous QR-check-in sessions NEVER get staff portal access
@@ -832,6 +848,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setVerifiedRole(null);
         setVerifiedAssignedCourseIds(null);
         setIsAuthorized(false);
+        setPendingAuthorization(null);
         setCurrentUserState(GUEST_USER);
         wipeUnauthorizedState();
         setIsAuthLoading(false);
@@ -840,80 +857,191 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       setIsAuthLoading(true);
       setIsCloudConnected(true);
-
-      const userEmail = (user.email || '').toLowerCase().trim();
-      const isMasterHod = userEmail === MASTER_HOD_EMAIL.toLowerCase() && user.emailVerified !== false;
-
-      let resolvedRole: UserRole | null = null;
-      let resolvedName = user.displayName || (userEmail ? userEmail.split('@')[0] : 'Academic Staff');
-      let resolvedDept = 'Department of Information Technology';
-      let resolvedAssignedCourseIds: string[] | null = null;
-
-      if (isMasterHod) {
-        resolvedRole = 'hod';
-        resolvedName = 'Jones Darko';
-      } else if (userEmail && user.emailVerified) {
-        try {
-          const emailSnap = await getDoc(doc(db, 'authorizedEmails', userEmail));
-          if (emailSnap.exists()) {
-            const data = emailSnap.data() as {
-              role?: UserRole;
-              name?: string;
-              department?: string;
-              assignedCourseIds?: string[];
-            };
-            if (data.role && ['hod', 'lecturer', 'class_rep'].includes(data.role)) {
-              resolvedRole = data.role;
-              resolvedName = user.displayName || data.name || resolvedName;
-              resolvedDept = data.department || resolvedDept;
-              if (data.role === 'lecturer') {
-                resolvedAssignedCourseIds = Array.isArray(data.assignedCourseIds)
-                  ? data.assignedCourseIds.filter((cid) => typeof cid === 'string' && cid.trim().length > 0)
-                  : [];
-              }
-            }
-          }
-        } catch (err) {
-          console.warn('[Auth] Authorization lookup blocked or unavailable:', err);
-        }
-      }
-
-      if (resolvedRole) {
-        if (resolvedName === 'Dr. Jones Darko') {
-          resolvedName = 'Jones Darko';
-        }
-        setVerifiedRole(resolvedRole);
-        setVerifiedAssignedCourseIds(resolvedAssignedCourseIds);
-        setIsAuthorized(true);
-        setCurrentUserState({
-          name: resolvedName,
-          email: user.email || userEmail,
-          role: resolvedRole,
-          department: resolvedDept,
-          ...(resolvedAssignedCourseIds ? { assignedCourseIds: resolvedAssignedCourseIds } : {}),
-          photoURL: user.photoURL || undefined,
-          uid: user.uid
-        });
-        setIsAuthLoading(false);
-        await initializeFirestore(resolvedRole);
-      } else {
-        // Signed-in Google user is NOT on the HOD's authorized registry
-        setVerifiedRole(null);
-        setVerifiedAssignedCourseIds(null);
-        setIsAuthorized(false);
-        setCurrentUserState({
-          name: user.displayName || 'Unauthorized Account',
-          email: user.email || '',
-          role: 'class_rep',
-          department: ''
-        });
-        wipeUnauthorizedState();
-        setIsAuthLoading(false);
-      }
     });
 
     return () => unsubscribe();
-  }, [initializeFirestore, wipeUnauthorizedState]);
+  }, [wipeUnauthorizedState]);
+
+  // Real-time listener on the signed-in verified user's /authorizedEmails/{email} doc
+  // Enables immediate response to HOD invites, two-step confirmation acceptance/decline, and revocation.
+  useEffect(() => {
+    if (!firebaseUser || firebaseUser.isAnonymous) {
+      return;
+    }
+
+    const userEmail = (firebaseUser.email || '').toLowerCase().trim();
+    const isMasterHod = userEmail === MASTER_HOD_EMAIL.toLowerCase() && firebaseUser.emailVerified !== false;
+
+    if (isMasterHod) {
+      setPendingAuthorization(null);
+      setVerifiedRole('hod');
+      setVerifiedAssignedCourseIds(null);
+      setIsAuthorized(true);
+      setCurrentUserState({
+        name: 'Jones Darko',
+        email: firebaseUser.email || userEmail,
+        role: 'hod',
+        department: 'Department of Information Technology',
+        photoURL: firebaseUser.photoURL || undefined,
+        uid: firebaseUser.uid
+      });
+      setIsAuthLoading(false);
+      initializeFirestore('hod');
+      return;
+    }
+
+    if (!userEmail || !firebaseUser.emailVerified) {
+      setVerifiedRole(null);
+      setVerifiedAssignedCourseIds(null);
+      setIsAuthorized(false);
+      setPendingAuthorization(null);
+      setCurrentUserState({
+        name: firebaseUser.displayName || 'Unauthorized Account',
+        email: firebaseUser.email || '',
+        role: 'class_rep',
+        department: ''
+      });
+      wipeUnauthorizedState();
+      setIsAuthLoading(false);
+      return;
+    }
+
+    let isActive = true;
+    const unsubEmailDoc = onSnapshot(
+      doc(db, 'authorizedEmails', userEmail),
+      (emailSnap) => {
+        if (!isActive) return;
+
+        if (!emailSnap.exists()) {
+          setPendingAuthorization(null);
+          setVerifiedRole(null);
+          setVerifiedAssignedCourseIds(null);
+          setIsAuthorized(false);
+          setCurrentUserState({
+            name: firebaseUser.displayName || 'Unauthorized Account',
+            email: firebaseUser.email || '',
+            role: 'class_rep',
+            department: ''
+          });
+          wipeUnauthorizedState();
+          setIsAuthLoading(false);
+          return;
+        }
+
+        const data = emailSnap.data() as {
+          role?: UserRole;
+          name?: string;
+          department?: string;
+          courseAssigned?: string;
+          assignedCourseIds?: string[];
+          level?: string;
+          stream?: string;
+          addedAt?: string;
+          status?: 'pending' | 'active' | 'declined' | null;
+          invitedBy?: string;
+          invitedByName?: string;
+          invitedAt?: string;
+          acceptedAt?: string;
+          declinedAt?: string;
+          responseNote?: string;
+          lastEmailSentAt?: string;
+          userDocId?: string;
+        };
+
+        if (!data.role || !['hod', 'lecturer', 'class_rep'].includes(data.role)) {
+          setPendingAuthorization(null);
+          setVerifiedRole(null);
+          setVerifiedAssignedCourseIds(null);
+          setIsAuthorized(false);
+          wipeUnauthorizedState();
+          setIsAuthLoading(false);
+          return;
+        }
+
+        const effectiveStatus = data.status || 'active';
+        const resolvedName =
+          firebaseUser.displayName || data.name || (userEmail ? userEmail.split('@')[0] : 'Academic Staff');
+        const resolvedDept = data.department || 'Department of Information Technology';
+
+        // Two-step confirmation gate: pending or declined invitees MUST confirm on their notice card first
+        if (effectiveStatus === 'pending' || effectiveStatus === 'declined') {
+          setPendingAuthorization({
+            id: data.userDocId || `auth-${userEmail.replace(/[^a-zA-Z0-9]/g, '_')}`,
+            email: userEmail,
+            name: data.name || resolvedName,
+            role: data.role,
+            department: resolvedDept,
+            ...(data.courseAssigned ? { courseAssigned: data.courseAssigned } : {}),
+            ...(Array.isArray(data.assignedCourseIds) ? { assignedCourseIds: data.assignedCourseIds } : {}),
+            ...(data.level ? { level: data.level } : {}),
+            ...(data.stream ? { stream: data.stream } : {}),
+            ...(data.addedAt ? { addedAt: data.addedAt } : {}),
+            status: effectiveStatus,
+            ...(data.invitedBy ? { invitedBy: data.invitedBy } : {}),
+            ...(data.invitedByName ? { invitedByName: data.invitedByName } : {}),
+            ...(data.invitedAt ? { invitedAt: data.invitedAt } : {}),
+            ...(data.acceptedAt ? { acceptedAt: data.acceptedAt } : {}),
+            ...(data.declinedAt ? { declinedAt: data.declinedAt } : {}),
+            ...(data.responseNote ? { responseNote: data.responseNote } : {}),
+            ...(data.lastEmailSentAt ? { lastEmailSentAt: data.lastEmailSentAt } : {})
+          });
+          setVerifiedRole(null);
+          setVerifiedAssignedCourseIds(null);
+          setIsAuthorized(false);
+          setCurrentUserState({
+            name: data.name || resolvedName,
+            email: firebaseUser.email || userEmail,
+            role: data.role,
+            department: resolvedDept
+          });
+          wipeUnauthorizedState();
+          setIsAuthLoading(false);
+          return;
+        }
+
+        // Active & accepted staff member
+        let resolvedAssignedCourseIds: string[] | null = null;
+        if (data.role === 'lecturer') {
+          resolvedAssignedCourseIds = Array.isArray(data.assignedCourseIds)
+            ? data.assignedCourseIds.filter((cid) => typeof cid === 'string' && cid.trim().length > 0)
+            : [];
+        }
+
+        const cleanName = resolvedName === 'Dr. Jones Darko' ? 'Jones Darko' : resolvedName;
+        setPendingAuthorization(null);
+        setVerifiedRole(data.role);
+        setVerifiedAssignedCourseIds(resolvedAssignedCourseIds);
+        setIsAuthorized(true);
+        setCurrentUserState({
+          name: cleanName,
+          email: firebaseUser.email || userEmail,
+          role: data.role,
+          department: resolvedDept,
+          ...(data.stream ? { stream: data.stream } : {}),
+          ...(resolvedAssignedCourseIds ? { assignedCourseIds: resolvedAssignedCourseIds } : {}),
+          photoURL: firebaseUser.photoURL || undefined,
+          uid: firebaseUser.uid
+        });
+        setIsAuthLoading(false);
+        initializeFirestore(data.role);
+      },
+      (err) => {
+        if (!isActive) return;
+        console.warn('[Auth] Authorization listener blocked or unavailable:', err);
+        setPendingAuthorization(null);
+        setVerifiedRole(null);
+        setVerifiedAssignedCourseIds(null);
+        setIsAuthorized(false);
+        wipeUnauthorizedState();
+        setIsAuthLoading(false);
+      }
+    );
+
+    return () => {
+      isActive = false;
+      unsubEmailDoc();
+    };
+  }, [firebaseUser, initializeFirestore, wipeUnauthorizedState]);
 
   // Ref to latest checkInStudentWithIndex for processing student QR check-in tickets
   const checkInStudentWithIndexRef = useRef<
@@ -1270,11 +1398,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
         setAuthorizedUsers(list.length > 0 ? list : INITIAL_AUTHORIZED_USERS);
 
-        // If a non-master user was just revoked or had assigned courses updated while logged in, sync immediately
+        // If a non-master user was revoked, set back to pending/declined, or had assigned courses updated while logged in, sync immediately
         const activeEmail = (firebaseUser.email || '').toLowerCase().trim();
         if (list.length > 0 && activeEmail && activeEmail !== MASTER_HOD_EMAIL.toLowerCase()) {
           const matchedUser = list.find((u) => u.email.toLowerCase().trim() === activeEmail);
-          if (!matchedUser) {
+          if (!matchedUser || matchedUser.status === 'pending' || matchedUser.status === 'declined') {
             setVerifiedRole(null);
             setVerifiedAssignedCourseIds(null);
             setIsAuthorized(false);
@@ -1367,7 +1495,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       await signInWithGoogle(forcePrompt);
     } catch (err) {
-      console.error('Sign-in failed:', err);
+      const code = (err as { code?: string })?.code;
+      if (code !== 'auth/popup-closed-by-user' && code !== 'auth/cancelled-popup-request') {
+        console.error('Sign-in failed:', err);
+      }
       throw err;
     }
   };
@@ -1380,7 +1511,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       await logOut();
       await signInWithGoogle(true);
     } catch (err) {
-      console.error('Switch account failed:', err);
+      const code = (err as { code?: string })?.code;
+      if (code !== 'auth/popup-closed-by-user' && code !== 'auth/cancelled-popup-request') {
+        console.error('Switch account failed:', err);
+      }
       throw err;
     }
   };
@@ -1398,20 +1532,132 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const acceptPendingAuthorization = async (): Promise<boolean> => {
+    if (!firebaseUser || firebaseUser.isAnonymous || !firebaseUser.email || !pendingAuthorization) {
+      return false;
+    }
+
+    const cleanEmail = firebaseUser.email.toLowerCase().trim();
+    const nowIso = new Date().toISOString();
+    const targetUserDocId =
+      pendingAuthorization.id || `auth-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_')}`;
+
+    await updateDoc(doc(db, 'authorizedEmails', cleanEmail), {
+      status: 'active',
+      acceptedAt: nowIso,
+      declinedAt: null,
+      responseNote: null
+    });
+
+    try {
+      await updateDoc(doc(db, 'authorizedUsers', targetUserDocId), {
+        status: 'active',
+        acceptedAt: nowIso,
+        declinedAt: null,
+        responseNote: null
+      });
+    } catch (syncErr) {
+      console.warn('[Auth] authorizedUsers activation sync note:', syncErr);
+    }
+
+    try {
+      const logId = `log-${Date.now()}`;
+      await setDoc(doc(db, 'auditLogs', logId), {
+        id: logId,
+        action: 'Staff Authorization Accepted',
+        details: `${pendingAuthorization.name || cleanEmail} (${cleanEmail}) confirmed and activated ${pendingAuthorization.role.toUpperCase()} portal access.`,
+        timestamp: nowIso,
+        user: cleanEmail,
+        type: 'security'
+      });
+    } catch (logErr) {
+      console.warn('[Auth] Activation audit log note:', logErr);
+    }
+
+    return true;
+  };
+
+  const declinePendingAuthorization = async (note?: string): Promise<boolean> => {
+    if (!firebaseUser || firebaseUser.isAnonymous || !firebaseUser.email || !pendingAuthorization) {
+      return false;
+    }
+
+    const cleanEmail = firebaseUser.email.toLowerCase().trim();
+    const nowIso = new Date().toISOString();
+    const cleanNote = (note || '').trim().slice(0, 300) || null;
+    const targetUserDocId =
+      pendingAuthorization.id || `auth-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_')}`;
+
+    await updateDoc(doc(db, 'authorizedEmails', cleanEmail), {
+      status: 'declined',
+      declinedAt: nowIso,
+      acceptedAt: null,
+      responseNote: cleanNote
+    });
+
+    try {
+      await updateDoc(doc(db, 'authorizedUsers', targetUserDocId), {
+        status: 'declined',
+        declinedAt: nowIso,
+        acceptedAt: null,
+        responseNote: cleanNote
+      });
+    } catch (syncErr) {
+      console.warn('[Auth] authorizedUsers decline sync note:', syncErr);
+    }
+
+    return true;
+  };
+
+  const markAuthorizationEmailSent = async (emailOrId: string): Promise<void> => {
+    const clean = emailOrId.trim().toLowerCase();
+    const matched = authorizedUsers.find(
+      (u) => u.id === emailOrId || u.email.toLowerCase() === clean
+    );
+    const cleanEmail = matched ? matched.email.toLowerCase().trim() : clean;
+    const targetId = matched ? matched.id : `auth-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_')}`;
+    const sentAt = new Date().toISOString();
+
+    setAuthorizedUsers((prev) =>
+      prev.map((u) =>
+        u.id === targetId || u.email.toLowerCase() === cleanEmail
+          ? { ...u, lastEmailSentAt: sentAt }
+          : u
+      )
+    );
+
+    if (isAuthorized && firebaseUser && !firebaseUser.isAnonymous) {
+      try {
+        await updateDoc(doc(db, 'authorizedUsers', targetId), { lastEmailSentAt: sentAt });
+      } catch (err) {
+        console.warn('[Auth] Could not update authorizedUsers lastEmailSentAt:', err);
+      }
+      try {
+        await updateDoc(doc(db, 'authorizedEmails', cleanEmail), { lastEmailSentAt: sentAt });
+      } catch (err) {
+        console.warn('[Auth] Could not update authorizedEmails lastEmailSentAt:', err);
+      }
+    }
+  };
+
   // Manage Authorized Users (HOD can assign Lecturer & Class Rep; Lecturer can assign Class Rep ONLY)
-  const addAuthorizedUser = async (userData: Omit<AuthorizedUser, 'id' | 'addedAt'>) => {
+  const addAuthorizedUser = async (
+    userData: Omit<AuthorizedUser, 'id' | 'addedAt'>
+  ): Promise<AuthorizedUser | null> => {
     if (verifiedRole === 'class_rep' || currentUser.role === 'class_rep') {
       alert('Class Representatives do not have permission to authorize or assign personnel.');
-      return;
+      return null;
     }
     if ((verifiedRole === 'lecturer' || currentUser.role === 'lecturer') && userData.role !== 'class_rep') {
       alert('Course Lecturers are only authorized to assign Class Representatives.');
-      return;
+      return null;
     }
 
     const cleanEmail = userData.email.toLowerCase().trim();
     const id = `auth-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_')}`;
     const addedAt = new Date().toISOString().split('T')[0];
+    const nowIso = new Date().toISOString();
+    const initialStatus = cleanEmail === MASTER_HOD_EMAIL.toLowerCase() ? 'active' : 'pending';
 
     const newUser: AuthorizedUser = {
       id,
@@ -1419,11 +1665,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       email: cleanEmail,
       role: userData.role,
       department: userData.department || 'Department of Information Technology',
-      ...(userData.courseAssigned ? { courseAssigned: userData.courseAssigned } : {}),
+      ...(userData.courseAssigned ? { courseAssigned: userData.courseAssigned.slice(0, 500) } : {}),
       ...(Array.isArray(userData.assignedCourseIds) ? { assignedCourseIds: userData.assignedCourseIds } : {}),
       ...(userData.level ? { level: userData.level } : {}),
       ...(userData.stream ? { stream: userData.stream } : {}),
-      addedAt
+      addedAt,
+      status: initialStatus,
+      invitedBy: currentUser.email || firebaseUser?.email || '',
+      invitedByName: currentUser.name || 'Department Administration',
+      invitedAt: nowIso
     };
 
     setAuthorizedUsers((prev) => {
@@ -1432,9 +1682,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     await addAuditLog(
-      'Authorized Personnel Added',
-      `Assigned by ${currentUser.name} (${currentUser.role.toUpperCase()}): Granted ${newUser.role.toUpperCase()} access to ${newUser.name} (${cleanEmail})${newUser.courseAssigned ? ` [${newUser.courseAssigned}]` : ''}`,
-      'timetable'
+      'Authorized Personnel Invited',
+      `Assigned by ${currentUser.name} (${currentUser.role.toUpperCase()}): Granted ${newUser.role.toUpperCase()} invite (pending confirmation) to ${newUser.name} (${cleanEmail})${newUser.courseAssigned ? ` [${newUser.courseAssigned}]` : ''}`,
+      'security'
     );
 
     if (isAuthorized && firebaseUser && !firebaseUser.isAnonymous) {
@@ -1447,31 +1697,54 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           department: newUser.department || 'Department of Information Technology',
           ...(newUser.courseAssigned ? { courseAssigned: newUser.courseAssigned } : {}),
           ...(Array.isArray(newUser.assignedCourseIds) ? { assignedCourseIds: newUser.assignedCourseIds } : {}),
+          ...(newUser.level ? { level: newUser.level } : {}),
+          ...(newUser.stream ? { stream: newUser.stream } : {}),
+          status: initialStatus,
+          invitedBy: newUser.invitedBy,
+          invitedByName: newUser.invitedByName,
+          invitedAt: nowIso,
+          userDocId: newUser.id,
           addedAt
         });
       } catch (error) {
         handleFirestoreError(error, OperationType.CREATE, `authorizedUsers/${newUser.id}`);
       }
     }
+
+    return newUser;
   };
 
   const updateAuthorizedUser = async (
     id: string,
     updates: Partial<Omit<AuthorizedUser, 'id' | 'email' | 'addedAt'>>
-  ) => {
+  ): Promise<AuthorizedUser | null> => {
     if (verifiedRole !== 'hod') {
       alert('Only the Head of Department (HOD) can update staff assignments.');
-      return;
+      return null;
     }
 
     const existing = authorizedUsers.find((u) => u.id === id);
-    if (!existing) return;
+    if (!existing) return null;
 
     const cleanEmail = existing.email.toLowerCase().trim();
+    const wasDeclined = existing.status === 'declined';
+    const nextStatus = updates.status ?? (wasDeclined ? 'pending' : existing.status || 'active');
+    const nowIso = new Date().toISOString();
+
     const rawUpdated: AuthorizedUser = {
       ...existing,
       ...updates,
-      ...(updates.name ? { name: updates.name.trim() } : {})
+      ...(updates.name ? { name: updates.name.trim() } : {}),
+      status: nextStatus,
+      ...(wasDeclined
+        ? {
+            invitedBy: currentUser.email || firebaseUser?.email || existing.invitedBy,
+            invitedByName: currentUser.name || existing.invitedByName || 'Head of Department',
+            invitedAt: nowIso,
+            declinedAt: undefined,
+            responseNote: undefined
+          }
+        : {})
     };
 
     if (rawUpdated.role !== 'lecturer') {
@@ -1503,14 +1776,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           name: updatedUser.name,
           role: updatedUser.role,
           department: updatedUser.department || 'Department of Information Technology',
-          ...(updatedUser.courseAssigned !== undefined ? { courseAssigned: updatedUser.courseAssigned } : {}),
+          ...(updatedUser.courseAssigned !== undefined ? { courseAssigned: updatedUser.courseAssigned.slice(0, 500) } : {}),
           ...(updatedUser.assignedCourseIds !== undefined ? { assignedCourseIds: updatedUser.assignedCourseIds } : {}),
+          ...(updatedUser.level !== undefined ? { level: updatedUser.level } : {}),
+          ...(updatedUser.stream !== undefined ? { stream: updatedUser.stream } : {}),
+          ...(updatedUser.status !== undefined ? { status: updatedUser.status } : {}),
+          ...(updatedUser.invitedBy !== undefined ? { invitedBy: updatedUser.invitedBy } : {}),
+          ...(updatedUser.invitedByName !== undefined ? { invitedByName: updatedUser.invitedByName } : {}),
+          ...(updatedUser.invitedAt !== undefined ? { invitedAt: updatedUser.invitedAt } : {}),
+          ...(updatedUser.acceptedAt !== undefined ? { acceptedAt: updatedUser.acceptedAt } : {}),
+          ...(updatedUser.declinedAt !== undefined ? { declinedAt: updatedUser.declinedAt } : {}),
+          ...(updatedUser.responseNote !== undefined ? { responseNote: updatedUser.responseNote } : {}),
+          ...(updatedUser.lastEmailSentAt !== undefined ? { lastEmailSentAt: updatedUser.lastEmailSentAt } : {}),
+          userDocId: id,
           addedAt: updatedUser.addedAt || new Date().toISOString().split('T')[0]
         });
       } catch (error) {
         handleFirestoreError(error, OperationType.UPDATE, `authorizedUsers/${id}`);
       }
     }
+
+    return updatedUser;
   };
 
   const removeAuthorizedUser = async (id: string) => {
@@ -2977,11 +3263,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isCloudConnected,
         isAuthorized,
         verifiedRole,
+        pendingAuthorization,
         isLecturerCourseScoped,
         authorizedUsers,
         loginWithGoogle,
         logoutUser,
         switchAccount,
+        acceptPendingAuthorization,
+        declinePendingAuthorization,
+        markAuthorizationEmailSent,
         addAuthorizedUser,
         updateAuthorizedUser,
         removeAuthorizedUser,

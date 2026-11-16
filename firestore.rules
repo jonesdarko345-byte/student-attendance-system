@@ -39,44 +39,42 @@ service cloud.firestore {
       return resource.data;
     }
 
+    function isEmailActive(data) {
+      return !('status' in data) || data.status == null || data.status == 'active';
+    }
+
+    function hasActiveEmailRole(roles) {
+      return isVerifiedUser()
+        && exists(/databases/$(database)/documents/authorizedEmails/$(userEmailLower()))
+        && isEmailActive(get(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())).data)
+        && get(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())).data.role in roles;
+    }
+
     // Master Admin (HOD) Helper
     function isAdmin() {
       return isVerifiedUser() && (
         userEmailLower() == "jonesdarko345@gmail.com" ||
         exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
-        (exists(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())) &&
-         get(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())).data.role == "hod")
+        hasActiveEmailRole(["hod"])
       );
     }
 
     // Authorized Lecturer or HOD Helper
     function isLecturerOrAdmin() {
-      return isAdmin() || (
-        isVerifiedUser() &&
-        exists(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())) &&
-        get(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())).data.role in ["hod", "lecturer"]
-      );
+      return isAdmin() || hasActiveEmailRole(["hod", "lecturer"]);
     }
 
     // Any Authorized Academic Personnel (HOD, Lecturer, or Class Rep)
     function isAuthorizedStaff() {
-      return isAdmin() || (
-        isVerifiedUser() &&
-        exists(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())) &&
-        get(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())).data.role in ["hod", "lecturer", "class_rep"]
-      );
+      return isAdmin() || hasActiveEmailRole(["hod", "lecturer", "class_rep"]);
     }
 
     function isLecturer() {
-      return isVerifiedUser() &&
-        exists(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())) &&
-        get(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())).data.role == "lecturer";
+      return hasActiveEmailRole(["lecturer"]);
     }
 
     function isClassRep() {
-      return isVerifiedUser() &&
-        exists(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())) &&
-        get(/databases/$(database)/documents/authorizedEmails/$(userEmailLower())).data.role == "class_rep";
+      return hasActiveEmailRole(["class_rep"]);
     }
 
     function lecturerHasCourse(courseId) {
@@ -171,29 +169,56 @@ service cloud.firestore {
 
     function isValidAuthorizedUser(data) {
       return data.keys().hasAll(['id', 'email', 'name', 'role'])
-        && data.keys().hasOnly(['id', 'email', 'name', 'role', 'department', 'courseAssigned', 'assignedCourseIds', 'level', 'stream', 'addedAt'])
+        && data.keys().hasOnly([
+          'id', 'email', 'name', 'role', 'department', 'courseAssigned', 'assignedCourseIds',
+          'level', 'stream', 'addedAt', 'status', 'invitedBy', 'invitedByName', 'invitedAt',
+          'acceptedAt', 'declinedAt', 'responseNote', 'lastEmailSentAt'
+        ])
         && data.id is string && data.id.size() > 0 && data.id.size() <= 128
         && data.email is string && data.email.size() >= 5 && data.email.size() <= 120
         && data.name is string && data.name.size() > 0 && data.name.size() <= 120
         && data.role in ['hod', 'lecturer', 'class_rep']
         && (!('department' in data) || data.department == null || (data.department is string && data.department.size() <= 150))
-        && (!('courseAssigned' in data) || data.courseAssigned == null || (data.courseAssigned is string && data.courseAssigned.size() <= 200))
+        && (!('courseAssigned' in data) || data.courseAssigned == null || (data.courseAssigned is string && data.courseAssigned.size() <= 500))
         && (!('assignedCourseIds' in data) || (data.assignedCourseIds is list && data.assignedCourseIds.size() <= 50))
         && (!('level' in data) || data.level == null || (data.level is string && data.level.size() <= 40))
         && (!('stream' in data) || data.stream == null || (data.stream is string && data.stream.size() <= 40))
-        && (!('addedAt' in data) || data.addedAt == null || (data.addedAt is string && data.addedAt.size() <= 40));
+        && (!('addedAt' in data) || data.addedAt == null || (data.addedAt is string && data.addedAt.size() <= 40))
+        && (!('status' in data) || data.status == null || data.status in ['pending', 'active', 'declined'])
+        && (!('invitedBy' in data) || data.invitedBy == null || (data.invitedBy is string && data.invitedBy.size() <= 120))
+        && (!('invitedByName' in data) || data.invitedByName == null || (data.invitedByName is string && data.invitedByName.size() <= 120))
+        && (!('invitedAt' in data) || data.invitedAt == null || (data.invitedAt is string && data.invitedAt.size() <= 60))
+        && (!('acceptedAt' in data) || data.acceptedAt == null || (data.acceptedAt is string && data.acceptedAt.size() <= 60))
+        && (!('declinedAt' in data) || data.declinedAt == null || (data.declinedAt is string && data.declinedAt.size() <= 60))
+        && (!('responseNote' in data) || data.responseNote == null || (data.responseNote is string && data.responseNote.size() <= 300))
+        && (!('lastEmailSentAt' in data) || data.lastEmailSentAt == null || (data.lastEmailSentAt is string && data.lastEmailSentAt.size() <= 60));
     }
 
     function isValidAuthorizedEmail(data) {
       return data.keys().hasAll(['email', 'role'])
-        && data.keys().hasOnly(['email', 'name', 'role', 'department', 'courseAssigned', 'assignedCourseIds', 'addedAt'])
+        && data.keys().hasOnly([
+          'email', 'name', 'role', 'department', 'courseAssigned', 'assignedCourseIds',
+          'level', 'stream', 'addedAt', 'status', 'invitedBy', 'invitedByName', 'invitedAt',
+          'acceptedAt', 'declinedAt', 'responseNote', 'lastEmailSentAt', 'userDocId'
+        ])
         && data.email is string && data.email.size() >= 5 && data.email.size() <= 120
         && data.role in ['hod', 'lecturer', 'class_rep']
         && (!('name' in data) || data.name == null || (data.name is string && data.name.size() <= 120))
         && (!('department' in data) || data.department == null || (data.department is string && data.department.size() <= 150))
-        && (!('courseAssigned' in data) || data.courseAssigned == null || (data.courseAssigned is string && data.courseAssigned.size() <= 200))
+        && (!('courseAssigned' in data) || data.courseAssigned == null || (data.courseAssigned is string && data.courseAssigned.size() <= 500))
         && (!('assignedCourseIds' in data) || (data.assignedCourseIds is list && data.assignedCourseIds.size() <= 50))
-        && (!('addedAt' in data) || data.addedAt == null || (data.addedAt is string && data.addedAt.size() <= 40));
+        && (!('level' in data) || data.level == null || (data.level is string && data.level.size() <= 40))
+        && (!('stream' in data) || data.stream == null || (data.stream is string && data.stream.size() <= 40))
+        && (!('addedAt' in data) || data.addedAt == null || (data.addedAt is string && data.addedAt.size() <= 40))
+        && (!('status' in data) || data.status == null || data.status in ['pending', 'active', 'declined'])
+        && (!('invitedBy' in data) || data.invitedBy == null || (data.invitedBy is string && data.invitedBy.size() <= 120))
+        && (!('invitedByName' in data) || data.invitedByName == null || (data.invitedByName is string && data.invitedByName.size() <= 120))
+        && (!('invitedAt' in data) || data.invitedAt == null || (data.invitedAt is string && data.invitedAt.size() <= 60))
+        && (!('acceptedAt' in data) || data.acceptedAt == null || (data.acceptedAt is string && data.acceptedAt.size() <= 60))
+        && (!('declinedAt' in data) || data.declinedAt == null || (data.declinedAt is string && data.declinedAt.size() <= 60))
+        && (!('responseNote' in data) || data.responseNote == null || (data.responseNote is string && data.responseNote.size() <= 300))
+        && (!('lastEmailSentAt' in data) || data.lastEmailSentAt == null || (data.lastEmailSentAt is string && data.lastEmailSentAt.size() <= 60))
+        && (!('userDocId' in data) || data.userDocId == null || (data.userDocId is string && data.userDocId.size() <= 128));
     }
 
     function isValidUserProfile(data) {
@@ -399,22 +424,37 @@ service cloud.firestore {
       allow delete: if isAdmin() && isValidId(logId);
     }
 
-    // Authorized Personnel Registry (HOD manages all; Lecturers manage Class Reps only)
+    // Authorized Personnel Registry (HOD manages all; Lecturers manage Class Reps; Invitees can accept/decline own status)
     match /authorizedUsers/{userId} {
-      allow get: if isAuthorizedStaff() && isValidId(userId);
+      allow get: if isValidId(userId) && (
+        isAuthorizedStaff() ||
+        (isVerifiedUser() && resource != null && resource.data.email is string && resource.data.email.lower() == userEmailLower())
+      );
       allow list: if isAuthorizedStaff();
       allow create: if isValidId(userId) && isValidAuthorizedUser(incoming()) && (
         isAdmin() ||
         (isLecturerOrAdmin() && incoming().role == 'class_rep')
       );
-      allow update: if isAdmin() && isValidId(userId) && isValidAuthorizedUser(incoming());
+      allow update: if isValidId(userId) && isValidAuthorizedUser(incoming()) && (
+        isAdmin() ||
+        (isLecturerOrAdmin() && existing().role == 'class_rep' && incoming().role == 'class_rep') ||
+        (
+          isVerifiedUser() &&
+          existing().email is string &&
+          existing().email.lower() == userEmailLower() &&
+          incoming().email.lower() == existing().email.lower() &&
+          existing().role == incoming().role &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'acceptedAt', 'declinedAt', 'responseNote']) &&
+          incoming().status in ['active', 'declined']
+        )
+      );
       allow delete: if isValidId(userId) && existing().email.lower() != "jonesdarko345@gmail.com" && (
         isAdmin() ||
         (isLecturerOrAdmin() && existing().role == 'class_rep')
       );
     }
 
-    // Email-Indexed Authorization Lookup (Verified users may check ONLY their own email doc)
+    // Email-Indexed Authorization Lookup (Verified users may inspect and accept/decline ONLY their own email doc)
     match /authorizedEmails/{email} {
       allow get: if isValidEmailDocId(email) && email == email.lower() && (
         (isVerifiedUser() && email == userEmailLower()) ||
@@ -425,7 +465,17 @@ service cloud.firestore {
         isAdmin() ||
         (isLecturerOrAdmin() && incoming().role == 'class_rep')
       );
-      allow update: if isAdmin() && isValidEmailDocId(email) && email == email.lower() && isValidAuthorizedEmail(incoming()) && incoming().email.lower() == email;
+      allow update: if isValidEmailDocId(email) && email == email.lower() && isValidAuthorizedEmail(incoming()) && incoming().email.lower() == email && (
+        isAdmin() ||
+        (isLecturerOrAdmin() && existing().role == 'class_rep' && incoming().role == 'class_rep') ||
+        (
+          isVerifiedUser() &&
+          email == userEmailLower() &&
+          existing().role == incoming().role &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'acceptedAt', 'declinedAt', 'responseNote']) &&
+          incoming().status in ['active', 'declined']
+        )
+      );
       allow delete: if isValidEmailDocId(email) && email == email.lower() && email != "jonesdarko345@gmail.com" && (
         isAdmin() ||
         (isLecturerOrAdmin() && existing().role == 'class_rep')

@@ -274,15 +274,65 @@
         "courseAssigned": {
           "type": "string",
           "description": "Human-readable summary of assigned courses",
-          "maxLength": 200
+          "maxLength": 500
         },
         "assignedCourseIds": {
           "type": "array",
           "description": "List of course document IDs assigned to the lecturer"
         },
+        "level": {
+          "type": "string",
+          "description": "Class level for class representatives",
+          "maxLength": 40
+        },
+        "stream": {
+          "type": "string",
+          "description": "Class division or stream",
+          "maxLength": 40
+        },
         "addedAt": {
           "type": "string",
           "description": "Date or ISO string when authorized"
+        },
+        "status": {
+          "type": "string",
+          "description": "Two-step confirmation status: pending, active, or declined",
+          "maxLength": 20
+        },
+        "invitedBy": {
+          "type": "string",
+          "description": "Email of authorizing HOD or Lecturer",
+          "maxLength": 120
+        },
+        "invitedByName": {
+          "type": "string",
+          "description": "Name of authorizing HOD or Lecturer",
+          "maxLength": 120
+        },
+        "invitedAt": {
+          "type": "string",
+          "description": "ISO timestamp when invitation was created",
+          "maxLength": 60
+        },
+        "acceptedAt": {
+          "type": "string",
+          "description": "ISO timestamp when staff member accepted access",
+          "maxLength": 60
+        },
+        "declinedAt": {
+          "type": "string",
+          "description": "ISO timestamp when staff member declined or flagged mismatch",
+          "maxLength": 60
+        },
+        "responseNote": {
+          "type": "string",
+          "description": "Optional note provided when declining or flagging a mismatch",
+          "maxLength": 300
+        },
+        "lastEmailSentAt": {
+          "type": "string",
+          "description": "ISO timestamp when Gmail notification was last sent",
+          "maxLength": 60
         }
       },
       "required": ["id", "email", "role"]
@@ -407,11 +457,66 @@
         "courseAssigned": {
           "type": "string",
           "description": "Human-readable summary of assigned courses",
-          "maxLength": 200
+          "maxLength": 500
+        },
+        "level": {
+          "type": "string",
+          "description": "Class level for class representatives",
+          "maxLength": 40
+        },
+        "stream": {
+          "type": "string",
+          "description": "Class division or stream",
+          "maxLength": 40
         },
         "addedAt": {
           "type": "string",
           "description": "Date added"
+        },
+        "status": {
+          "type": "string",
+          "description": "Two-step confirmation status: pending, active, or declined",
+          "maxLength": 20
+        },
+        "invitedBy": {
+          "type": "string",
+          "description": "Email of authorizing HOD or Lecturer",
+          "maxLength": 120
+        },
+        "invitedByName": {
+          "type": "string",
+          "description": "Name of authorizing HOD or Lecturer",
+          "maxLength": 120
+        },
+        "invitedAt": {
+          "type": "string",
+          "description": "ISO timestamp when invitation was created",
+          "maxLength": 60
+        },
+        "acceptedAt": {
+          "type": "string",
+          "description": "ISO timestamp when staff member accepted access",
+          "maxLength": 60
+        },
+        "declinedAt": {
+          "type": "string",
+          "description": "ISO timestamp when staff member declined or flagged mismatch",
+          "maxLength": 60
+        },
+        "responseNote": {
+          "type": "string",
+          "description": "Optional note provided when declining or flagging a mismatch",
+          "maxLength": 300
+        },
+        "lastEmailSentAt": {
+          "type": "string",
+          "description": "ISO timestamp when Gmail notification was last sent",
+          "maxLength": 60
+        },
+        "userDocId": {
+          "type": "string",
+          "description": "Document ID of paired record in authorizedUsers",
+          "maxLength": 128
         }
       },
       "required": ["email", "role"]

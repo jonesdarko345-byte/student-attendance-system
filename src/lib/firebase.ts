@@ -22,12 +22,20 @@ import {
 import defaultConfig from '../../firebase-applet-config.json';
 
 // Support both Vercel environment variables (VITE_FIREBASE_*) and bundled firebase-applet-config.json
+const configWithOptionalDb = defaultConfig as typeof defaultConfig & {
+  firestoreDatabaseId?: string;
+};
+
 const firebaseConfig = {
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || defaultConfig.projectId,
   appId: import.meta.env.VITE_FIREBASE_APP_ID || defaultConfig.appId,
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY || defaultConfig.apiKey,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || defaultConfig.authDomain,
-  firestoreDatabaseId: import.meta.env.VITE_FIREBASE_FIRESTORE_DATABASE_ID || import.meta.env.VITE_FIRESTORE_DATABASE_ID || defaultConfig.firestoreDatabaseId,
+  firestoreDatabaseId:
+    import.meta.env.VITE_FIREBASE_FIRESTORE_DATABASE_ID ||
+    import.meta.env.VITE_FIRESTORE_DATABASE_ID ||
+    configWithOptionalDb.firestoreDatabaseId ||
+    'ai-studio-remixstudentbiom-5d7ae755-01c3-4373-8086-2a5905a03153',
   storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || defaultConfig.storageBucket,
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || defaultConfig.messagingSenderId,
 };
@@ -83,7 +91,31 @@ if (typeof window !== 'undefined') {
 // Initialize Firebase Authentication
 export const auth = getAuth(app);
 
+// Least-privilege Workspace OAuth scope for HOD/Lecturer Gmail notification emails
+export const WORKSPACE_SCOPES = [
+  'https://www.googleapis.com/auth/gmail.send'
+] as const;
+
 export const googleProvider = new GoogleAuthProvider();
+WORKSPACE_SCOPES.forEach((scope) => googleProvider.addScope(scope));
+
+// Strictly in-memory OAuth access token cache (never persisted to Web Storage)
+let cachedGmailAccessToken: string | null = null;
+
+export function getCachedGmailAccessToken(): string | null {
+  return cachedGmailAccessToken;
+}
+
+export function clearCachedGmailAccessToken(): void {
+  cachedGmailAccessToken = null;
+}
+
+// Automatically clear in-memory token whenever Firebase Auth signs out
+onAuthStateChanged(auth, (user) => {
+  if (!user) {
+    cachedGmailAccessToken = null;
+  }
+});
 
 // Operation Types for Structured Error Diagnostics
 export enum OperationType {
@@ -190,9 +222,49 @@ export async function signInWithGoogle(forceAccountPrompt = false) {
     const result = await signInWithPopup(auth, provider);
     return result.user;
   } catch (error) {
-    console.error('Google Sign-In Error:', error);
+    const code = (error as { code?: string })?.code;
+    if (code !== 'auth/popup-closed-by-user' && code !== 'auth/cancelled-popup-request') {
+      console.error('Google Sign-In Error:', error);
+    }
     throw error;
   }
+}
+
+/**
+ * Acquires a fresh Google OAuth access token scoped with gmail.send strictly from a user click.
+ * Keeps the token purely in memory; never persists to localStorage/sessionStorage.
+ */
+export async function authorizeGmailSending(loginHintEmail?: string, forceConsent = false): Promise<string> {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    const offlineErr = new Error('Your browser appears to be offline.') as Error & { code?: string };
+    offlineErr.code = 'auth/network-request-failed';
+    throw offlineErr;
+  }
+
+  if (!forceConsent && cachedGmailAccessToken) {
+    return cachedGmailAccessToken;
+  }
+
+  const provider = new GoogleAuthProvider();
+  WORKSPACE_SCOPES.forEach((scope) => provider.addScope(scope));
+  const params: Record<string, string> = {};
+  if (loginHintEmail) {
+    params.login_hint = loginHintEmail;
+  }
+  if (forceConsent) {
+    params.prompt = 'consent';
+  }
+  if (Object.keys(params).length > 0) {
+    provider.setCustomParameters(params);
+  }
+
+  const result = await signInWithPopup(auth, provider);
+  const credential = GoogleAuthProvider.credentialFromResult(result);
+  if (!credential?.accessToken) {
+    throw new Error('Google did not return a Gmail sending permission token. Please accept the Gmail Send permission prompt and try again.');
+  }
+  cachedGmailAccessToken = credential.accessToken;
+  return credential.accessToken;
 }
 
 export async function silentSignInAnonymously() {
@@ -207,6 +279,7 @@ export async function silentSignInAnonymously() {
 
 export async function logOut() {
   try {
+    cachedGmailAccessToken = null;
     await signOut(auth);
   } catch (error) {
     console.error('Sign-Out Error:', error);

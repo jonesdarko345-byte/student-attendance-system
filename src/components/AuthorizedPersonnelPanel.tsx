@@ -2,6 +2,10 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { AuthorizedUser, UserRole } from '../types';
 import {
+  buildAuthorizationEmailSubject,
+  sendAuthorizationGmailNotice
+} from '../utils/gmailNotifier';
+import {
   UserPlus,
   Trash2,
   Building2,
@@ -14,7 +18,11 @@ import {
   Lock,
   Edit2,
   Search,
-  Check
+  Check,
+  Clock,
+  Mail,
+  Send,
+  AlertTriangle
 } from 'lucide-react';
 
 export const AuthorizedPersonnelPanel: React.FC = () => {
@@ -23,6 +31,8 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
     addAuthorizedUser,
     updateAuthorizedUser,
     removeAuthorizedUser,
+    markAuthorizationEmailSent,
+    addAuditLog,
     currentUser,
     verifiedRole,
     courses
@@ -40,15 +50,21 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
   const [courseSearch, setCourseSearch] = useState('');
   const [formError, setFormError] = useState('');
 
+  // Two-step confirmation & explicit Gmail send prompt state
+  const [emailPromptUser, setEmailPromptUser] = useState<AuthorizedUser | null>(null);
+  const [isSendingGmail, setIsSendingGmail] = useState(false);
+  const [gmailSendError, setGmailSendError] = useState<string | null>(null);
+  const [panelToast, setPanelToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
   const effectiveRole = verifiedRole || currentUser.role;
   const isHod = effectiveRole === 'hod';
   const isLecturer = effectiveRole === 'lecturer';
   const isClassRep = effectiveRole === 'class_rep';
   const canAuthorize = isHod || isLecturer;
 
-  // Lock background scroll while modal is open
+  // Lock background scroll while any modal is open
   useEffect(() => {
-    if (!showModal) return;
+    if (!showModal && !emailPromptUser) return;
     const html = document.documentElement;
     const body = document.body;
     const prevHtmlOverflow = html.style.overflow;
@@ -59,7 +75,7 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
       html.style.overflow = prevHtmlOverflow;
       body.style.overflow = prevBodyOverflow;
     };
-  }, [showModal]);
+  }, [showModal, emailPromptUser]);
 
   const sortedCourses = useMemo(
     () => [...courses].sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true })),
@@ -133,9 +149,74 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
     );
   };
 
+  const buildCourseSummary = (ids: string[]): string => {
+    const picked = sortedCourses.filter((c) => ids.includes(c.id));
+    if (picked.length === 0) return '';
+    const rich = picked.map((c) => `${c.code} (${c.title})`).join(', ');
+    if (rich.length <= 480) return rich;
+    return picked.map((c) => c.code).join(', ').slice(0, 480);
+  };
+
+  const openGmailConfirmModal = (user: AuthorizedUser) => {
+    setGmailSendError(null);
+    setEmailPromptUser(user);
+  };
+
+  const handleConfirmSendGmail = async () => {
+    if (!emailPromptUser) return;
+    setGmailSendError(null);
+    setIsSendingGmail(true);
+
+    try {
+      const resolvedCourseText =
+        emailPromptUser.role === 'lecturer'
+          ? emailPromptUser.courseAssigned ||
+            (Array.isArray(emailPromptUser.assignedCourseIds)
+              ? buildCourseSummary(emailPromptUser.assignedCourseIds)
+              : '')
+          : undefined;
+
+      const result = await sendAuthorizationGmailNotice(
+        {
+          recipientName: emailPromptUser.name,
+          recipientEmail: emailPromptUser.email,
+          role: emailPromptUser.role,
+          department: emailPromptUser.department,
+          courseAssigned: resolvedCourseText,
+          level: emailPromptUser.level,
+          stream: emailPromptUser.stream,
+          approvedByName: currentUser.name || 'Department Administration',
+          approvedByEmail: currentUser.email
+        },
+        currentUser.email
+      );
+
+      if (!result.success) {
+        setGmailSendError(result.error || 'Could not send Gmail notification.');
+        return;
+      }
+
+      await markAuthorizationEmailSent(emailPromptUser.id);
+      await addAuditLog(
+        'Gmail Notice Dispatched',
+        `Sent portal authorization notice via Gmail to ${emailPromptUser.name} (${emailPromptUser.email}) for ${emailPromptUser.role.toUpperCase()} confirmation.`,
+        'security'
+      );
+
+      setPanelToast({
+        type: 'success',
+        message: `Authorization email delivered to ${emailPromptUser.email}'s Gmail inbox.`
+      });
+      setEmailPromptUser(null);
+    } finally {
+      setIsSendingGmail(false);
+    }
+  };
+
   const handleSaveUser = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError('');
+    setPanelToast(null);
 
     if (isClassRep) {
       setFormError('Class Representatives do not have permission to assign personnel.');
@@ -161,15 +242,14 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
     }
 
     const derivedCourseSummary =
-      assignedRole === 'lecturer'
-        ? sortedCourses
-            .filter((c) => selectedCourseIds.includes(c.id))
-            .map((c) => c.code)
-            .join(', ')
-        : undefined;
+      assignedRole === 'lecturer' ? buildCourseSummary(selectedCourseIds) : undefined;
+
+    let savedUser: AuthorizedUser | null = null;
+    const wasDeclinedOrPending =
+      editingUser && (editingUser.status === 'declined' || editingUser.status === 'pending');
 
     if (editingUser) {
-      await updateAuthorizedUser(editingUser.id, {
+      savedUser = await updateAuthorizedUser(editingUser.id, {
         name: name.trim(),
         role: assignedRole,
         department,
@@ -187,7 +267,7 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
           : {})
       });
     } else {
-      await addAuthorizedUser({
+      savedUser = await addAuthorizedUser({
         name: name.trim(),
         email: cleanEmail,
         role: assignedRole,
@@ -215,6 +295,16 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
     setSelectedCourseIds([]);
     setCourseSearch('');
     setShowModal(false);
+
+    // Explicitly offer to send the Gmail notification if new invite or corrected pending/declined record
+    if (savedUser && (!editingUser || wasDeclinedOrPending)) {
+      openGmailConfirmModal(savedUser);
+    } else if (savedUser) {
+      setPanelToast({
+        type: 'success',
+        message: `Updated ${savedUser.name}'s assignment successfully.`
+      });
+    }
   };
 
   const getRoleBadge = (userRole: UserRole) => {
@@ -241,6 +331,35 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
     }
   };
 
+  const getStatusBadge = (user: AuthorizedUser, isMasterUser: boolean) => {
+    const status = isMasterUser ? 'active' : user.status || 'active';
+    if (status === 'pending') {
+      return {
+        status,
+        label: 'Pending Approval',
+        icon: Clock,
+        classes:
+          'text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/60 border-amber-200 dark:border-amber-800'
+      };
+    }
+    if (status === 'declined') {
+      return {
+        status,
+        label: 'Declined / Mismatch',
+        icon: AlertTriangle,
+        classes:
+          'text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/60 border-rose-200 dark:border-rose-800'
+      };
+    }
+    return {
+      status,
+      label: 'Active',
+      icon: CheckCircle2,
+      classes:
+        'text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 border-emerald-200 dark:border-emerald-800'
+    };
+  };
+
   return (
     <div className="space-y-6">
       {/* Top Banner */}
@@ -255,14 +374,14 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
                 Institutional Access Control
               </span>
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-400/20 text-emerald-200 border border-emerald-400/30 font-semibold">
-                Whitelist Protected
+                Two-Step Verified
               </span>
             </div>
             <h2 className="text-lg sm:text-xl font-black text-white">
-              Authorized Personnel & Portal Access
+              Authorized Personnel &amp; Portal Access
             </h2>
             <p className="text-xs sm:text-sm text-slate-200 max-w-2xl leading-relaxed">
-              Only Google accounts listed here can log into this system. Course Lecturers are strictly scoped to the courses assigned to their account by the HOD.
+              Newly authorized Lecturers and Class Representatives receive a Gmail notice and must confirm their assignment upon Google Sign-In before accessing departmental records.
             </p>
           </div>
         </div>
@@ -283,6 +402,33 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
         )}
       </div>
 
+      {/* Inline Notification Toast */}
+      {panelToast && (
+        <div
+          className={`p-3.5 rounded-2xl border text-xs font-semibold flex items-center justify-between gap-3 ${
+            panelToast.type === 'success'
+              ? 'bg-emerald-50 dark:bg-emerald-950/50 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200'
+              : 'bg-rose-50 dark:bg-rose-950/50 border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {panelToast.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
+            )}
+            <span>{panelToast.message}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setPanelToast(null)}
+            className="text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 font-bold cursor-pointer"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Access Rule Summary */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-sm flex items-start gap-3">
@@ -295,7 +441,7 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
               <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-100 dark:bg-purple-900/60 text-purple-700 dark:text-purple-300 font-semibold">Full Authority</span>
             </div>
             <p className="text-slate-500 dark:text-slate-400 mt-1">
-              Authorizes <strong>Course Lecturers</strong> with specific courses, creates/edits courses & schedules, and oversees all records.
+              Authorizes <strong>Course Lecturers</strong> with specific courses, sends Gmail invitations, and oversees all records.
             </p>
           </div>
         </div>
@@ -310,7 +456,7 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
               <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 font-semibold">Course Scoped</span>
             </div>
             <p className="text-slate-500 dark:text-slate-400 mt-1">
-              Accesses, marks attendance, views reports, and assigns Class Representatives <strong>strictly for their assigned courses</strong>.
+              Confirms course scope on first sign-in, manages attendance, and appoints <strong>Class Representatives</strong>.
             </p>
           </div>
         </div>
@@ -325,7 +471,7 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
               <span className="text-[10px] px-1.5 py-0.2 rounded bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-300 font-semibold">Assigned by HOD/Lecturer</span>
             </div>
             <p className="text-slate-500 dark:text-slate-400 mt-1">
-              Assists in taking roll calls and biometric verification within their assigned class division/stream.
+              Confirms division assignment upon sign-in and assists in taking roll calls &amp; biometric verification.
             </p>
           </div>
         </div>
@@ -337,7 +483,7 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
           <div>
             <h3 className="text-sm font-bold text-slate-900 dark:text-white">Approved Access Registry</h3>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              {authorizedUsers.length} authorized user(s) currently permitted to access this portal
+              {authorizedUsers.length} user(s) registered in institutional access control
             </p>
           </div>
           <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 flex items-center gap-1.5">
@@ -350,10 +496,10 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="bg-slate-50/80 dark:bg-slate-800/60 text-slate-500 dark:text-slate-400 font-bold border-b border-slate-100 dark:border-slate-800 uppercase tracking-wider text-[11px]">
-                <th className="py-3.5 px-6">Name & Google Email</th>
+                <th className="py-3.5 px-6">Name &amp; Google Email</th>
                 <th className="py-3.5 px-6">Assigned Role</th>
                 <th className="py-3.5 px-6">Department / Course Scope</th>
-                <th className="py-3.5 px-6">Status</th>
+                <th className="py-3.5 px-6">Confirmation Status</th>
                 <th className="py-3.5 px-6 text-right">Actions</th>
               </tr>
             </thead>
@@ -362,6 +508,8 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
                 const badge = getRoleBadge(user.role);
                 const Icon = badge.icon;
                 const isMasterUser = user.email.toLowerCase() === 'jonesdarko345@gmail.com';
+                const statusInfo = getStatusBadge(user, isMasterUser);
+                const StatusIcon = statusInfo.icon;
                 const assignedCourses =
                   user.role === 'lecturer' && Array.isArray(user.assignedCourseIds)
                     ? courses.filter((c) => user.assignedCourseIds!.includes(c.id))
@@ -423,18 +571,30 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
                           )}
                         </div>
                       )}
-                      {user.level && (
+                      {(user.level || user.stream) && (
                         <p className="text-[11px] text-blue-700 dark:text-blue-400 font-medium mt-0.5">
-                          {user.level} {user.stream ? `· ${user.stream}` : ''}
+                          {[user.level, user.stream].filter(Boolean).join(' · ')}
                         </p>
                       )}
                     </td>
 
                     <td className="py-3.5 px-6">
-                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                        <span>Authorized</span>
-                      </span>
+                      <div className="space-y-1">
+                        <span className={`inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-0.5 rounded-full border ${statusInfo.classes}`}>
+                          <StatusIcon className="w-3.5 h-3.5" />
+                          <span>{statusInfo.label}</span>
+                        </span>
+                        {!isMasterUser && user.lastEmailSentAt && (
+                          <p className="text-[10px] text-slate-400 dark:text-slate-500">
+                            Gmail sent {new Date(user.lastEmailSentAt).toLocaleDateString()}
+                          </p>
+                        )}
+                        {statusInfo.status === 'declined' && user.responseNote && (
+                          <p className="text-[11px] text-rose-700 dark:text-rose-300 bg-rose-50/70 dark:bg-rose-950/30 border border-rose-200/70 dark:border-rose-900/50 px-2 py-1 rounded-lg max-w-xs">
+                            "{user.responseNote}"
+                          </p>
+                        )}
+                      </div>
                     </td>
 
                     <td className="py-3.5 px-6 text-right">
@@ -442,8 +602,17 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
                         <span className="text-[10px] text-slate-400 dark:text-slate-500 italic">Primary HOD</span>
                       ) : (isHod || (isLecturer && user.role === 'class_rep')) ? (
                         <div className="inline-flex items-center justify-end gap-1">
+                          <button
+                            type="button"
+                            onClick={() => openGmailConfirmModal(user)}
+                            className="p-1.5 rounded-lg text-slate-400 dark:text-slate-500 hover:text-emerald-700 dark:hover:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 transition-colors cursor-pointer"
+                            title={user.lastEmailSentAt ? 'Resend Gmail notice' : 'Send Gmail notice'}
+                          >
+                            <Mail className="w-4 h-4" />
+                          </button>
                           {isHod && (
                             <button
+                              type="button"
                               onClick={() => openEditModal(user)}
                               className="p-1.5 rounded-lg text-slate-400 dark:text-slate-500 hover:text-[#007c82] dark:hover:text-teal-400 hover:bg-teal-50 dark:hover:bg-teal-950/40 transition-colors cursor-pointer"
                               title="Edit role & assigned courses"
@@ -452,6 +621,7 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
                             </button>
                           )}
                           <button
+                            type="button"
                             onClick={() => {
                               if (confirm(`Revoke portal access for ${user.name} (${user.email})?`)) {
                                 removeAuthorizedUser(user.id);
@@ -498,12 +668,13 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
                     {editingUser
                       ? 'Update role details or assigned course permissions'
                       : isLecturer
-                      ? 'Assign a student as Class Representative for your course and stream'
-                      : 'Assign Course Lecturer, Class Representative, or Head of Department'}
+                      ? 'Assign a student as Class Representative and notify their Gmail'
+                      : 'Authorize personnel with two-step Gmail confirmation'}
                   </p>
                 </div>
               </div>
               <button
+                type="button"
                 onClick={() => setShowModal(false)}
                 className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-lg font-bold p-1 cursor-pointer"
               >
@@ -541,7 +712,7 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="e.g. student@uenr.edu.gh or name@gmail.com"
+                  placeholder="e.g. lecturer@gmail.com or student@uenr.edu.gh"
                   required
                   disabled={Boolean(editingUser)}
                   className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-[#007c82] text-xs disabled:opacity-60 disabled:cursor-not-allowed"
@@ -549,7 +720,7 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
                 <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">
                   {editingUser
                     ? 'Email is tied to the authorized Google account and cannot be changed.'
-                    : 'Must match the Google account they use when signing into the portal.'}
+                    : 'Used both for Gmail authorization notice delivery and Google Sign-In.'}
                 </p>
               </div>
 
@@ -698,7 +869,7 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
                     </>
                   )}
                   <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                    When logged in, this lecturer will only see and manage attendance, timetable slots, and reports for these selected courses.
+                    When logged in and confirmed, this lecturer will only see and manage attendance, timetable slots, and reports for these selected courses.
                   </p>
                 </div>
               )}
@@ -752,11 +923,107 @@ export const AuthorizedPersonnelPanel: React.FC = () => {
                       ? 'Save Changes'
                       : isLecturer
                       ? 'Assign Class Representative'
-                      : 'Authorize Account'}
+                      : 'Authorize & Prepare Notice'}
                   </span>
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Explicit Confirmation Modal Before Sending Gmail Notice */}
+      {emailPromptUser && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto overscroll-contain">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 my-auto max-h-[90vh] overflow-y-auto overscroll-contain touch-pan-y space-y-4">
+            <div className="flex items-start justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0">
+                  <Mail className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Confirm Gmail Notification
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Notify invitee inbox that portal approval is ready
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={isSendingGmail}
+                onClick={() => setEmailPromptUser(null)}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-lg font-bold p-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="bg-slate-50 dark:bg-slate-800/70 rounded-2xl p-4 border border-slate-200 dark:border-slate-700 text-xs space-y-2">
+              <div>
+                <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Recipient</p>
+                <p className="font-bold text-slate-900 dark:text-white">{emailPromptUser.name}</p>
+                <p className="font-mono text-slate-600 dark:text-slate-300">{emailPromptUser.email}</p>
+              </div>
+              <div className="pt-2 border-t border-slate-200 dark:border-slate-700">
+                <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Email Subject</p>
+                <p className="font-semibold text-slate-800 dark:text-slate-200 mt-0.5">
+                  {buildAuthorizationEmailSubject({
+                    recipientName: emailPromptUser.name,
+                    recipientEmail: emailPromptUser.email,
+                    role: emailPromptUser.role,
+                    approvedByName: currentUser.name || 'Department Administration'
+                  })}
+                </p>
+              </div>
+              {emailPromptUser.courseAssigned && (
+                <div className="pt-2 border-t border-slate-200 dark:border-slate-700">
+                  <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Included Courses</p>
+                  <p className="font-medium text-slate-700 dark:text-slate-300 mt-0.5">
+                    {emailPromptUser.courseAssigned}
+                  </p>
+                </div>
+              )}
+              {emailPromptUser.role === 'class_rep' && (emailPromptUser.level || emailPromptUser.stream) && (
+                <div className="pt-2 border-t border-slate-200 dark:border-slate-700">
+                  <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Class Assignment</p>
+                  <p className="font-medium text-slate-700 dark:text-slate-300 mt-0.5">
+                    {[emailPromptUser.level, emailPromptUser.stream].filter(Boolean).join(' · ')}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+              This will send an email from your signed-in Google account via Gmail API informing <strong>{emailPromptUser.name}</strong> to sign into this portal and approve access at their end.
+            </p>
+
+            {gmailSendError && (
+              <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-xs font-semibold text-rose-700 dark:text-rose-300">
+                {gmailSendError}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                disabled={isSendingGmail}
+                onClick={() => setEmailPromptUser(null)}
+                className="px-4 py-2.5 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                Skip for Now
+              </button>
+              <button
+                type="button"
+                disabled={isSendingGmail}
+                onClick={handleConfirmSendGmail}
+                className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md flex items-center gap-2 cursor-pointer disabled:opacity-60"
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span>{isSendingGmail ? 'Sending via Gmail...' : 'Confirm & Send Gmail'}</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

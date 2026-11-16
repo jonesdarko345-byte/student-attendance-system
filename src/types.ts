@@ -108,6 +108,7 @@ export interface AutoLoggingSettings {
 }
 
 export type UserRole = 'hod' | 'lecturer' | 'class_rep';
+export type AuthorizationStatus = 'pending' | 'active' | 'declined';
 
 export interface AuthorizedUser {
   id: string;
@@ -120,6 +121,14 @@ export interface AuthorizedUser {
   level?: string;
   stream?: string; // e.g. "IT A" if class rep is scoped to specific division
   addedAt?: string;
+  status?: AuthorizationStatus; // undefined treated as 'active' for legacy/primary HOD records
+  invitedBy?: string;
+  invitedByName?: string;
+  invitedAt?: string;
+  acceptedAt?: string;
+  declinedAt?: string;
+  responseNote?: string;
+  lastEmailSentAt?: string;
 }
 
 export interface CurrentUser {
