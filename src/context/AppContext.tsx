@@ -58,8 +58,9 @@ import {
 import { generateInstitutionalEmail } from '../utils/studentParser';
 import { streamsMatch } from '../utils/timetableHelper';
 
-export type NavigationTab = 'home' | 'attendance' | 'timetable' | 'admin' | 'reports';
+export type NavigationTab = 'home' | 'attendance' | 'timetable' | 'admin' | 'reports' | 'hod_admin';
 export type AdminSubTab = 'roster' | 'authorized' | 'database' | 'audit' | 'autologging';
+export type HodAdminTab = 'audit' | 'authorized' | 'autologging' | 'database';
 export type ThemeMode = 'light' | 'dark' | 'system';
 
 export interface AttendanceLaunchTarget {
@@ -86,6 +87,8 @@ interface AppContextType {
   clearAttendanceLaunchTarget: () => void;
   adminSubTab: AdminSubTab;
   setAdminSubTab: (tab: AdminSubTab) => void;
+  hodAdminTab: HodAdminTab;
+  setHodAdminTab: (tab: HodAdminTab) => void;
   openDatabaseTab: () => void;
   currentUser: CurrentUser;
   setCurrentUser: React.Dispatch<React.SetStateAction<CurrentUser>>;
@@ -275,6 +278,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [activeTab, setActiveTab] = useState<NavigationTab>('home');
   const [attendanceLaunchTarget, setAttendanceLaunchTarget] = useState<AttendanceLaunchTarget | null>(null);
   const [adminSubTab, setAdminSubTab] = useState<AdminSubTab>('roster');
+  const [hodAdminTab, setHodAdminTab] = useState<HodAdminTab>('audit');
   const [isRoleMenuOpen, setIsRoleMenuOpen] = useState<boolean>(false);
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
@@ -292,8 +296,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const openDatabaseTab = useCallback(() => {
-    setActiveTab('admin');
-    setAdminSubTab('database');
+    setActiveTab('hod_admin');
+    setHodAdminTab('database');
   }, []);
 
   const [authorizedUsers, setAuthorizedUsers] = useState<AuthorizedUser[]>([]);
@@ -420,6 +424,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (isAuthorized && (verifiedRole === 'hod' || verifiedRole === 'lecturer')) {
       try {
         await setDoc(doc(db, 'systemSettings', 'geofence'), nextSettings, { merge: true });
+        await addAuditLog(
+          'Campus Geofence Updated',
+          `Updated hall geofence "${nextSettings.campusName}" (${nextSettings.radiusMeters}m radius, rolling PIN ${nextSettings.rollingPinEnabled ? 'ON' : 'OFF'})`,
+          'security'
+        );
       } catch (err) {
         console.warn('[Firestore] systemSettings geofence sync notice:', err);
       }
@@ -641,11 +650,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [cancelledClasses, isAuthorized]);
 
   useEffect(() => {
-    if (!isAuthorized) return;
+    if (!isAuthorized || verifiedRole !== 'hod') return;
     try {
       localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify(auditLogs));
     } catch {}
-  }, [auditLogs, isAuthorized]);
+  }, [auditLogs, isAuthorized, verifiedRole]);
+
+  // Guard HOD-only tab if non-HOD is active
+  useEffect(() => {
+    if (activeTab === 'hod_admin' && verifiedRole !== 'hod') {
+      setActiveTab('home');
+    }
+  }, [activeTab, verifiedRole]);
 
   useEffect(() => {
     if (!isAuthorized) return;
@@ -1164,7 +1180,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const parsedCancelled: CancelledClass[] = JSON.parse(savedCancelled);
         setCancelledClasses(isLecturer ? parsedCancelled.filter((c) => allowedIds.includes(c.courseId)) : parsedCancelled);
       }
-      const savedLogs = localStorage.getItem(STORAGE_KEYS.AUDIT_LOGS);
+      const savedLogs = verifiedRole === 'hod' ? localStorage.getItem(STORAGE_KEYS.AUDIT_LOGS) : null;
       if (savedLogs) setAuditLogs(JSON.parse(savedLogs));
       const savedAuth = localStorage.getItem(STORAGE_KEYS.AUTHORIZED);
       if (savedAuth) setAuthorizedUsers(JSON.parse(savedAuth));
@@ -1359,21 +1375,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
     }
 
-    // 5. Audit Logs Listener
-    const unsubLogs = onSnapshot(
-      collection(db, 'auditLogs'),
-      (snapshot) => {
-        if (!snapshot.empty) {
+    // 5. Audit Logs Listener (Strictly HOD-only per Firestore governance rules)
+    let unsubLogs = () => {};
+    if (verifiedRole === 'hod') {
+      unsubLogs = onSnapshot(
+        collection(db, 'auditLogs'),
+        (snapshot) => {
           const list: AuditLog[] = [];
           snapshot.forEach((d) => list.push(d.data() as AuditLog));
           list.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
           setAuditLogs(list);
+        },
+        (error) => {
+          console.warn('[Firestore] Audit logs sync notice:', error);
         }
-      },
-      (error) => {
-        console.warn('[Firestore] Audit logs sync notice:', error);
-      }
-    );
+      );
+    } else {
+      setAuditLogs([]);
+      try {
+        localStorage.removeItem(STORAGE_KEYS.AUDIT_LOGS);
+      } catch {}
+    }
 
     // 6. Authorized Users Listener (with real-time revocation & live course-assignment sync)
     const unsubAuthUsers = onSnapshot(
@@ -1519,11 +1541,62 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // Record sign-in once per active authenticated browser session
+  useEffect(() => {
+    if (!isAuthorized || !firebaseUser || firebaseUser.isAnonymous || !verifiedRole) return;
+    if (!autoLoggingSettings.autoLogAuthLogins) return;
+    const sessionKey = `uenr_signin_logged_${firebaseUser.uid}`;
+    try {
+      if (sessionStorage.getItem(sessionKey) === '1') return;
+      sessionStorage.setItem(sessionKey, '1');
+    } catch {}
+
+    const logId = `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const nowIso = new Date().toISOString();
+    const actor = (firebaseUser.email || currentUser.email || currentUser.name || 'Staff').slice(0, 150);
+    const loginEntry: AuditLog = {
+      id: logId,
+      action: 'Portal Sign-In',
+      details: `${currentUser.name || actor} (${verifiedRole.toUpperCase()}) authenticated and opened the portal.`.slice(0, 1000),
+      timestamp: nowIso,
+      user: actor,
+      type: 'security'
+    };
+    if (verifiedRole === 'hod') {
+      setAuditLogs((prev) => [loginEntry, ...prev]);
+    }
+    setDoc(doc(db, 'auditLogs', logId), loginEntry).catch((err) => {
+      console.warn('[AuditLog] Sign-in log note:', err);
+    });
+  }, [isAuthorized, firebaseUser, verifiedRole, autoLoggingSettings.autoLogAuthLogins, currentUser.email, currentUser.name]);
+
   const logoutUser = async () => {
     try {
+      if (isAuthorized && firebaseUser && !firebaseUser.isAnonymous && autoLoggingSettings.autoLogAuthLogins) {
+        try {
+          const actor = (firebaseUser.email || currentUser.email || currentUser.name || 'Staff').slice(0, 150);
+          const logId = `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+          await setDoc(doc(db, 'auditLogs', logId), {
+            id: logId,
+            action: 'Portal Sign-Out',
+            details: `${currentUser.name || actor} (${(verifiedRole || currentUser.role).toUpperCase()}) signed out of the portal.`.slice(0, 1000),
+            timestamp: new Date().toISOString(),
+            user: actor,
+            type: 'security'
+          });
+        } catch (logErr) {
+          console.warn('[AuditLog] Sign-out log note:', logErr);
+        }
+      }
+      try {
+        if (firebaseUser?.uid) {
+          sessionStorage.removeItem(`uenr_signin_logged_${firebaseUser.uid}`);
+        }
+      } catch {}
       wipeUnauthorizedState();
       setVerifiedRole(null);
       setIsAuthorized(false);
+      setActiveTab('home');
       setCurrentUserState(GUEST_USER);
       await logOut();
     } catch (err) {
@@ -1836,20 +1909,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Audit Log Action
+  // Audit Log Action (append-only; visible strictly to HOD via Firestore & UI)
   const addAuditLog = async (action: string, details: string, type: AuditLog['type']) => {
     const newLog: AuditLog = {
-      id: `log-${Date.now()}`,
-      action,
-      details,
+      id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      action: action.slice(0, 120),
+      details: details.slice(0, 1000),
       timestamp: new Date().toISOString(),
-      user: currentUser.email || currentUser.name,
+      user: (currentUser.email || currentUser.name || 'Academic Staff').slice(0, 150),
       type
     };
 
-    setAuditLogs((prev) => [newLog, ...prev]);
+    if (verifiedRole === 'hod') {
+      setAuditLogs((prev) => [newLog, ...prev]);
+    }
 
-    if (firebaseUser) {
+    if (firebaseUser && !firebaseUser.isAnonymous && isAuthorized) {
       try {
         await setDoc(doc(db, 'auditLogs', newLog.id), newLog);
       } catch (error) {
@@ -3022,13 +3097,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         count++;
         const cleanEmail = (u.email || '').toLowerCase().trim();
         if (cleanEmail) {
-          batch.set(doc(db, 'authorizedEmails', cleanEmail), {
-            email: cleanEmail,
-            name: u.name,
-            role: u.role,
-            department: u.department || 'Department of Information Technology',
-            addedAt: u.addedAt || new Date().toISOString().split('T')[0]
-          });
+          batch.set(
+            doc(db, 'authorizedEmails', cleanEmail),
+            {
+              email: cleanEmail,
+              name: u.name,
+              role: u.role,
+              department: u.department || 'Department of Information Technology',
+              ...(u.courseAssigned !== undefined ? { courseAssigned: u.courseAssigned } : {}),
+              ...(Array.isArray(u.assignedCourseIds) ? { assignedCourseIds: u.assignedCourseIds } : {}),
+              ...(u.level !== undefined ? { level: u.level } : {}),
+              ...(u.stream !== undefined ? { stream: u.stream } : {}),
+              ...(u.status !== undefined ? { status: u.status } : {}),
+              userDocId: u.id,
+              addedAt: u.addedAt || new Date().toISOString().split('T')[0]
+            },
+            { merge: true }
+          );
           count++;
         }
       });
@@ -3042,11 +3127,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         await batch.commit();
       }
       setIsCloudConnected(true);
-      await addAuditLog('Cloud Database Synchronized', `Synchronized ${count} record(s) to Firestore Cloud database`, 'student');
+      await addAuditLog('Cloud Database Synchronized', `Synchronized ${count} record(s) to Firestore Cloud database`, 'system');
       return { success: true, count };
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Force cloud sync error:', err);
-      return { success: false, count: 0, error: err.message || 'Database synchronization failed' };
+      const message = err instanceof Error ? err.message : 'Database synchronization failed';
+      return { success: false, count: 0, error: message };
     } finally {
       setIsSyncing(false);
     }
@@ -3138,7 +3224,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
 
-      await addAuditLog('Database Restored', `Restored snapshot with ${totalCount} records`, 'student');
+      await addAuditLog('Database Restored', `Restored snapshot with ${totalCount} records`, 'system');
       return { success: true, count: totalCount };
     } catch (err: any) {
       return { success: false, count: 0, error: err.message || 'Invalid JSON file format' };
@@ -3245,6 +3331,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         clearAttendanceLaunchTarget,
         adminSubTab,
         setAdminSubTab,
+        hodAdminTab,
+        setHodAdminTab,
         openDatabaseTab,
         currentUser,
         setCurrentUser,

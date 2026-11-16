@@ -2,9 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { Student, DEFAULT_STREAMS } from '../types';
 import { BiometricEnrollment } from '../components/BiometricEnrollment';
-import { AuditLogPanel } from '../components/AuditLogPanel';
 import { AuthorizedPersonnelPanel } from '../components/AuthorizedPersonnelPanel';
-import { AutoLoggingSettingsPanel } from '../components/AutoLoggingSettingsPanel';
 import {
   Users,
   UserPlus,
@@ -59,6 +57,9 @@ export const Admin: React.FC = () => {
     updateAllStudentEmailsToNameBased,
     authorizedUsers,
     currentUser,
+    verifiedRole,
+    setActiveTab,
+    setHodAdminTab,
     adminSubTab,
     setAdminSubTab
   } = useApp();
@@ -84,6 +85,14 @@ export const Admin: React.FC = () => {
     const timer = setTimeout(() => setToastMessage(''), 4500);
     return () => clearTimeout(timer);
   }, [toastMessage]);
+
+  // Keep Students page scoped to Roster (and Class Rep assignment for Lecturers only)
+  useEffect(() => {
+    const allowAuthorizedHere = verifiedRole === 'lecturer';
+    if (adminSubTab !== 'roster' && !(allowAuthorizedHere && adminSubTab === 'authorized')) {
+      setAdminSubTab('roster');
+    }
+  }, [adminSubTab, verifiedRole, setAdminSubTab]);
 
   // Add single student form modal & tab
   const [showAddModal, setShowAddModal] = useState<boolean>(false);
@@ -1351,11 +1360,17 @@ export const Admin: React.FC = () => {
         <div>
           <div className="flex items-center gap-2 text-xs font-bold text-[#007c82] dark:text-teal-400 uppercase tracking-wider">
             <GraduationCap className="w-4 h-4" />
-            Class Management & Security
+            Students &amp; Class Roster
           </div>
-          <h2 className="text-2xl font-black text-slate-900 dark:text-white mt-0.5">Roster & Access Governance</h2>
+          <h2 className="text-2xl font-black text-slate-900 dark:text-white mt-0.5">
+            {verifiedRole === 'lecturer'
+              ? 'Class Roster & Representatives'
+              : 'Class Roster & Biometric Enrollment'}
+          </h2>
           <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
-            Manage your class student list, enroll biometrics, and authorize Faculty / Class Reps.
+            {verifiedRole === 'lecturer'
+              ? 'Manage your course student roster, enroll biometrics, and appoint a Class Representative.'
+              : 'Manage student class records, cohort levels, and biometric fingerprint enrollment.'}
           </p>
         </div>
 
@@ -1374,53 +1389,41 @@ export const Admin: React.FC = () => {
               <span>Class Roster ({students.length})</span>
             </button>
 
-            <button
-              onClick={() => setAdminSubTab('authorized')}
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                adminSubTab === 'authorized'
-                  ? 'bg-[#007c82] text-white shadow-sm'
-                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
-              }`}
-            >
-              <KeyRound className="w-3.5 h-3.5" />
-              <span>Authorized Staff & Reps ({authorizedUsers.length})</span>
-            </button>
-
-            <button
-              onClick={() => setAdminSubTab('audit')}
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                adminSubTab === 'audit'
-                  ? 'bg-[#007c82] text-white shadow-sm'
-                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
-              }`}
-            >
-              <ShieldCheck className="w-3.5 h-3.5" />
-              <span>System Audit</span>
-            </button>
-
-            <button
-              onClick={() => setAdminSubTab('autologging')}
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                adminSubTab === 'autologging'
-                  ? 'bg-[#007c82] text-white shadow-sm'
-                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
-              }`}
-            >
-              <Sliders className="w-3.5 h-3.5" />
-              <span>Auto-Logging Settings</span>
-            </button>
+            {verifiedRole === 'lecturer' && (
+              <button
+                onClick={() => setAdminSubTab('authorized')}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  adminSubTab === 'authorized'
+                    ? 'bg-[#007c82] text-white shadow-sm'
+                    : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <KeyRound className="w-3.5 h-3.5" />
+                <span>Class Representatives ({authorizedUsers.filter((u) => u.role === 'class_rep').length})</span>
+              </button>
+            )}
           </div>
+
+          {verifiedRole === 'hod' && (
+            <button
+              type="button"
+              onClick={() => {
+                setHodAdminTab('audit');
+                setActiveTab('hod_admin');
+              }}
+              className="px-3.5 py-2 rounded-xl bg-[#003b5c] hover:bg-[#002d47] text-white text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 cursor-pointer"
+              title="Open HOD-Exclusive Governance & Activity Logs"
+            >
+              <ShieldCheck className="w-3.5 h-3.5 text-purple-300" />
+              <span>HOD Governance &amp; Logs</span>
+              <ArrowUpRight className="w-3.5 h-3.5 text-teal-300" />
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Sub-tab 1: Authorized Staff & Class Reps */}
-      {adminSubTab === 'authorized' && <AuthorizedPersonnelPanel />}
-
-      {/* Sub-tab 2: Audit Logs */}
-      {adminSubTab === 'audit' && <AuditLogPanel />}
-
-      {/* Sub-tab 3: Auto-Logging & Policy Settings */}
-      {adminSubTab === 'autologging' && <AutoLoggingSettingsPanel />}
+      {/* Lecturer Sub-tab: Appoint & Manage Class Representatives */}
+      {adminSubTab === 'authorized' && verifiedRole === 'lecturer' && <AuthorizedPersonnelPanel />}
 
       {/* Sub-tab 3: Student Roster */}
       {adminSubTab === 'roster' && (

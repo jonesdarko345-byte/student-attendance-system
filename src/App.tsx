@@ -9,10 +9,11 @@ import { Attendance } from './pages/Attendance';
 import { Timetable } from './pages/Timetable';
 import { Admin } from './pages/Admin';
 import { Reports } from './pages/Reports';
+import { HodAdmin } from './pages/HodAdmin';
 import { StudentCheckIn } from './components/StudentCheckIn';
 
 const AppContent: React.FC = () => {
-  const { activeTab } = useApp();
+  const { activeTab, verifiedRole } = useApp();
   const isCheckInMode = typeof window !== 'undefined' && window.location.search.includes('checkin=');
 
   if (isCheckInMode) {
@@ -30,6 +31,7 @@ const AppContent: React.FC = () => {
           {activeTab === 'timetable' && <Timetable />}
           {activeTab === 'admin' && <Admin />}
           {activeTab === 'reports' && <Reports />}
+          {activeTab === 'hod_admin' && verifiedRole === 'hod' && <HodAdmin />}
         </main>
 
         <Footer />

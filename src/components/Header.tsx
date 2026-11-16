@@ -32,6 +32,8 @@ export const Header: React.FC = () => {
   const {
     activeTab,
     setActiveTab,
+    setAdminSubTab,
+    setHodAdminTab,
     openDatabaseTab,
     currentUser,
     setCurrentUser,
@@ -152,12 +154,15 @@ export const Header: React.FC = () => {
     };
   }, [isRoleMenuOpen]);
 
-  const navItems: { id: NavigationTab; label: string; icon: React.FC<{ className?: string }> }[] = [
+  const navItems: { id: NavigationTab; label: string; icon: React.FC<{ className?: string }>; isHodExclusive?: boolean }[] = [
     { id: 'home', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'attendance', label: 'Attendance', icon: CalendarCheck },
     { id: 'timetable', label: 'Timetable', icon: CalendarDays },
     { id: 'admin', label: 'Students', icon: Users },
-    { id: 'reports', label: 'Reports', icon: BarChart3 }
+    { id: 'reports', label: 'Reports', icon: BarChart3 },
+    ...(verifiedRole === 'hod'
+      ? [{ id: 'hod_admin' as NavigationTab, label: 'HOD Admin', icon: ShieldCheck, isHodExclusive: true }]
+      : [])
   ];
 
   const todayStr = new Date().toLocaleDateString('en-GB', {
@@ -231,11 +236,25 @@ export const Header: React.FC = () => {
                   onClick={() => setActiveTab(item.id)}
                   className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-semibold transition-all duration-150 cursor-pointer ${
                     isActive
-                      ? 'bg-[#007c82] text-white shadow-sm ring-1 ring-white/20'
+                      ? item.isHodExclusive
+                        ? 'bg-purple-600 text-white shadow-sm ring-1 ring-purple-300/40'
+                        : 'bg-[#007c82] text-white shadow-sm ring-1 ring-white/20'
+                      : item.isHodExclusive
+                      ? 'text-purple-200 hover:text-white hover:bg-purple-500/25 border border-purple-400/25'
                       : 'text-slate-200 hover:text-white hover:bg-white/10'
                   }`}
                 >
-                  <Icon className={`w-4 h-4 ${isActive ? 'text-emerald-300' : 'text-slate-300'}`} />
+                  <Icon
+                    className={`w-4 h-4 ${
+                      isActive
+                        ? item.isHodExclusive
+                          ? 'text-purple-200'
+                          : 'text-emerald-300'
+                        : item.isHodExclusive
+                        ? 'text-purple-300'
+                        : 'text-slate-300'
+                    }`}
+                  />
                   {item.label}
                 </button>
               );
@@ -562,24 +581,67 @@ export const Header: React.FC = () => {
                     </div>
 
                     {/* Management Shortcuts */}
-                    <div className="border-t border-slate-100 dark:border-slate-800 py-1.5">
-                      <div className="px-4 py-1 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                        Management Shortcuts
-                      </div>
-                      
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setActiveTab('admin');
-                          setIsRoleMenuOpen(false);
-                        }}
-                        className="w-full flex items-center gap-2.5 px-4 py-2 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 text-left cursor-pointer"
-                      >
-                        <KeyRound className="w-4 h-4 text-purple-600 dark:text-purple-400" />
-                        <span>Manage Authorized Staff & Class Reps</span>
-                      </button>
+                    {(verifiedRole === 'hod' || verifiedRole === 'lecturer') && (
+                      <div className="border-t border-slate-100 dark:border-slate-800 py-1.5">
+                        <div className="px-4 py-1 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                          Management Shortcuts
+                        </div>
 
-                      {(verifiedRole === 'hod' || verifiedRole === 'lecturer') && (
+                        {verifiedRole === 'hod' ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setHodAdminTab('audit');
+                                setActiveTab('hod_admin');
+                                setIsRoleMenuOpen(false);
+                              }}
+                              className="w-full flex items-center gap-2.5 px-4 py-2 text-xs font-bold text-purple-700 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-950/30 text-left cursor-pointer"
+                            >
+                              <ShieldCheck className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                              <span>HOD Governance &amp; Activity Logs</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setHodAdminTab('authorized');
+                                setActiveTab('hod_admin');
+                                setIsRoleMenuOpen(false);
+                              }}
+                              className="w-full flex items-center gap-2.5 px-4 py-2 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 text-left cursor-pointer"
+                            >
+                              <KeyRound className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                              <span>Authorized Staff &amp; Approvals</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                openDatabaseTab();
+                                setIsRoleMenuOpen(false);
+                              }}
+                              className="w-full flex items-center gap-2.5 px-4 py-2 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 text-left cursor-pointer"
+                            >
+                              <Cloud className="w-4 h-4 text-[#007c82] dark:text-teal-400" />
+                              <span>Database &amp; System Diagnostics</span>
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAdminSubTab('authorized');
+                              setActiveTab('admin');
+                              setIsRoleMenuOpen(false);
+                            }}
+                            className="w-full flex items-center gap-2.5 px-4 py-2 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 text-left cursor-pointer"
+                          >
+                            <KeyRound className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                            <span>Assign Class Representative</span>
+                          </button>
+                        )}
+
                         <button
                           type="button"
                           onClick={() => {
@@ -593,8 +655,8 @@ export const Header: React.FC = () => {
                           <RotateCcw className="w-4 h-4 text-amber-600 dark:text-amber-400" />
                           <span>Clear All Students in Class</span>
                         </button>
-                      )}
-                    </div>
+                      </div>
+                    )}
 
 
                     {/* Account Actions */}

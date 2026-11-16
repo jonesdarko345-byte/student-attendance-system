@@ -18,7 +18,17 @@ import {
 } from 'lucide-react';
 
 export const Reports: React.FC = () => {
-  const { students, courses, attendanceRecords, cancelledClasses, semester, currentUser, isLecturerCourseScoped } = useApp();
+  const {
+    students,
+    courses,
+    attendanceRecords,
+    cancelledClasses,
+    semester,
+    currentUser,
+    isLecturerCourseScoped,
+    addAuditLog,
+    autoLoggingSettings
+  } = useApp();
 
   const userStream = currentUser?.role === 'class_rep' && currentUser?.stream ? currentUser.stream : null;
 
@@ -145,9 +155,28 @@ export const Reports: React.FC = () => {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+
+    if (autoLoggingSettings.autoLogReportExports) {
+      const courseLabel =
+        selectedCourseFilter === 'all'
+          ? 'All Courses'
+          : courses.find((c) => c.id === selectedCourseFilter)?.code || selectedCourseFilter;
+      addAuditLog(
+        'Report Exported',
+        `Exported CSV attendance compliance report for ${courseLabel} (${selectedStreamFilter === 'all' ? 'All Divisions' : selectedStreamFilter}, ${studentStats.length} students).`,
+        'system'
+      ).catch(() => {});
+    }
   };
 
   const handlePrint = () => {
+    if (autoLoggingSettings.autoLogReportExports) {
+      addAuditLog(
+        'Report Printed',
+        `Opened printable attendance compliance report (${studentStats.length} students).`,
+        'system'
+      ).catch(() => {});
+    }
     window.print();
   };
 

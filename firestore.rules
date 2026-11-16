@@ -415,10 +415,10 @@ service cloud.firestore {
       allow delete: if isValidId(cancelId) && (isAdmin() || lecturerHasCourse(existing().courseId));
     }
 
-    // Audit Logs Collection: Append-Only by Authorized Staff, Immutable
+    // Audit Logs Collection: Append-Only by Authorized Staff, Readable Strictly by HOD Only
     match /auditLogs/{logId} {
-      allow get: if isAuthorizedStaff() && isValidId(logId);
-      allow list: if isAuthorizedStaff();
+      allow get: if isAdmin() && isValidId(logId);
+      allow list: if isAdmin();
       allow create: if isAuthorizedStaff() && isValidId(logId) && isValidAuditLog(incoming());
       allow update: if false;
       allow delete: if isAdmin() && isValidId(logId);

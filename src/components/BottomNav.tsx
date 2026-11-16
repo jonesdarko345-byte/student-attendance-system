@@ -4,19 +4,23 @@ import {
   CalendarCheck,
   CalendarDays,
   Users,
-  BarChart3
+  BarChart3,
+  ShieldCheck
 } from 'lucide-react';
 import { useApp, NavigationTab } from '../context/AppContext';
 
 export const BottomNav: React.FC = () => {
-  const { activeTab, setActiveTab, isRoleMenuOpen, setIsRoleMenuOpen } = useApp();
+  const { activeTab, setActiveTab, isRoleMenuOpen, setIsRoleMenuOpen, verifiedRole } = useApp();
 
   const navItems: { id: NavigationTab; label: string; icon: React.FC<{ className?: string }> }[] = [
     { id: 'home', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'attendance', label: 'Attendance', icon: CalendarCheck },
     { id: 'timetable', label: 'Timetable', icon: CalendarDays },
     { id: 'admin', label: 'Students', icon: Users },
-    { id: 'reports', label: 'Reports', icon: BarChart3 }
+    { id: 'reports', label: 'Reports', icon: BarChart3 },
+    ...(verifiedRole === 'hod'
+      ? [{ id: 'hod_admin' as NavigationTab, label: 'HOD Admin', icon: ShieldCheck }]
+      : [])
   ];
 
   return (
