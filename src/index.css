@@ -17,3 +17,54 @@ body {
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-x: contain;
 }
+
+/* Interactive Tech Grid & Cursor Spotlight Backdrop */
+.uenr-main-canvas {
+  --spot-x: 50%;
+  --spot-y: 22%;
+}
+
+.uenr-bg-dots {
+  background-image: radial-gradient(circle, rgba(0, 59, 92, 0.13) 1.15px, transparent 1.15px);
+  background-size: 24px 24px;
+}
+
+.dark .uenr-bg-dots {
+  background-image: radial-gradient(circle, rgba(45, 212, 191, 0.14) 1.15px, transparent 1.15px);
+}
+
+.uenr-bg-grid-glow {
+  background-image:
+    linear-gradient(to right, rgba(0, 124, 130, 0.14) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(0, 124, 130, 0.14) 1px, transparent 1px);
+  background-size: 48px 48px;
+  -webkit-mask-image: radial-gradient(320px circle at var(--spot-x) var(--spot-y), #000 0%, transparent 72%);
+  mask-image: radial-gradient(320px circle at var(--spot-x) var(--spot-y), #000 0%, transparent 72%);
+}
+
+.dark .uenr-bg-grid-glow {
+  background-image:
+    linear-gradient(to right, rgba(45, 212, 191, 0.18) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(45, 212, 191, 0.18) 1px, transparent 1px);
+  -webkit-mask-image: radial-gradient(360px circle at var(--spot-x) var(--spot-y), #000 0%, transparent 74%);
+  mask-image: radial-gradient(360px circle at var(--spot-x) var(--spot-y), #000 0%, transparent 74%);
+}
+
+.uenr-bg-spotlight {
+  background: radial-gradient(
+    560px circle at var(--spot-x) var(--spot-y),
+    rgba(0, 124, 130, 0.12),
+    rgba(141, 198, 63, 0.05) 42%,
+    transparent 72%
+  );
+}
+
+.dark .uenr-bg-spotlight {
+  background: radial-gradient(
+    600px circle at var(--spot-x) var(--spot-y),
+    rgba(20, 184, 166, 0.16),
+    rgba(0, 59, 92, 0.18) 45%,
+    transparent 74%
+  );
+}
+

@@ -38,7 +38,8 @@ import {
   Plus,
   Mail
 } from 'lucide-react';
-import { parseStudentRoster, generateSampleStudents, parseUploadedFile, generateInstitutionalEmail } from '../utils/studentParser';
+import { parseStudentRoster, generateSampleStudents, parseUploadedFile, generateInstitutionalEmail, detectCohortHints } from '../utils/studentParser';
+import { streamsMatch } from '../utils/timetableHelper';
 
 export type StudentSortOption = 'name-asc' | 'name-desc' | 'index-asc' | 'index-desc' | 'level-asc';
 
@@ -61,7 +62,8 @@ export const Admin: React.FC = () => {
     setActiveTab,
     setHodAdminTab,
     adminSubTab,
-    setAdminSubTab
+    setAdminSubTab,
+    cloudSyncError
   } = useApp();
 
   // Delete Specific Cohort / Level / Stream Modal
@@ -284,22 +286,45 @@ export const Admin: React.FC = () => {
 
     setBatchResultMsg(`Reading "${file.name}"...`);
     try {
-      const { text, result } = await parseUploadedFile(file, {
-        defaultLevel: batchDefaultLevel,
-        defaultStream: batchDefaultStream
+      const nameHints = detectCohortHints(file.name);
+      const effectiveLevel = nameHints.level && batchDefaultLevel === 'Level 100'
+        ? nameHints.level
+        : batchDefaultLevel;
+      const effectiveStream = nameHints.stream && batchDefaultStream === 'IT A'
+        ? nameHints.stream
+        : batchDefaultStream;
+
+      const { text, result, detectedHints } = await parseUploadedFile(file, {
+        defaultLevel: effectiveLevel,
+        defaultStream: effectiveStream
       });
+
+      const hintedLevel = detectedHints?.level || nameHints.level;
+      const hintedStream = detectedHints?.stream || nameHints.stream;
+      if (hintedLevel && hintedLevel !== batchDefaultLevel) {
+        setBatchDefaultLevel(hintedLevel);
+      }
+      if (hintedStream && hintedStream !== batchDefaultStream) {
+        setBatchDefaultStream(hintedStream);
+      }
+
       setBatchText(text);
       if (result.valid.length > 0) {
         setBatchRecords(
           result.valid.map((r, idx) => ({
             ...r,
+            level: r.level || hintedLevel || effectiveLevel,
+            stream: r.stream || hintedStream || effectiveStream,
             id: `file-${Date.now()}-${idx}`
           }))
         );
         setBatchViewMode('editor');
-        setBatchResultMsg(`✅ Loaded "${file.name}": recognized ${result.valid.length} valid student(s). Use editing filters below to refine records before registering.`);
+        const skippedNote = result.invalidLines.length > 0
+          ? ` (${result.invalidLines.length} line(s) skipped — check Raw Text if any are missing)`
+          : '';
+        setBatchResultMsg(`✅ Loaded "${file.name}": recognized ${result.valid.length} valid student(s)${skippedNote}. Review below and click Register Now.`);
       } else {
-        setBatchResultMsg(`⚠️ Loaded "${file.name}", but could not automatically detect student names or index numbers. Check preview below or edit headers.`);
+        setBatchResultMsg(`⚠️ Loaded "${file.name}", but could not automatically detect student names or index numbers. Switch to Raw Text below to inspect or verify columns.`);
       }
     } catch (err) {
       console.error('File read error:', err);
@@ -417,7 +442,20 @@ export const Admin: React.FC = () => {
     }
 
     setIsBatchImporting(true);
-    setBatchResultMsg(`Registering ${validRecords.length} student records...`);
+    setBatchResultMsg(`Registering ${validRecords.length} student records to Cloud Firestore...`);
+
+    const revealImportedCohort = () => {
+      setSearchQuery('');
+      const importedLevels = Array.from(new Set<string>(validRecords.map((r) => r.level || batchDefaultLevel)));
+      const importedStreams = Array.from(new Set<string>(validRecords.map((r) => r.stream || batchDefaultStream)));
+
+      if (selectedLevelFilter !== 'all' && !importedLevels.includes(selectedLevelFilter)) {
+        setSelectedLevelFilter(importedLevels.length === 1 ? importedLevels[0] : 'all');
+      }
+      if (selectedStreamFilter !== 'all' && !importedStreams.some((st) => streamsMatch(st, selectedStreamFilter))) {
+        setSelectedStreamFilter(importedStreams.length === 1 ? importedStreams[0] : 'all');
+      }
+    };
 
     try {
       const count = await batchAddStudents(validRecords, {
@@ -425,16 +463,12 @@ export const Admin: React.FC = () => {
         updateDuplicates: batchUpdateDuplicates
       });
 
-      const successNotice = `🎉 Successfully registered ${count} student(s) into class roster!`;
+      const successNotice = `🎉 Successfully registered ${count} student(s) and synced to Cloud Firestore!`;
       setBatchResultMsg(successNotice);
       setToastMessage(successNotice);
       setBatchText('');
       setBatchRecords([]);
-
-      // Auto update stream filter so imported students are visible on screen
-      if (selectedStreamFilter !== 'all' && selectedStreamFilter !== batchDefaultStream) {
-        setSelectedStreamFilter(batchDefaultStream);
-      }
+      revealImportedCohort();
 
       setTimeout(() => {
         setShowBatchModal(false);
@@ -444,7 +478,11 @@ export const Admin: React.FC = () => {
       }, 1500);
     } catch (err) {
       console.error('Batch import error:', err);
-      setBatchResultMsg('Notice: Could not finish batch import. Please verify your data and connection.');
+      revealImportedCohort();
+      const errDetail = err instanceof Error ? err.message : 'Cloud sync error';
+      setBatchResultMsg(
+        `Notice: Students were added locally, but Cloud Firestore sync failed (${errDetail}). Please check your connection or permissions and click Force Cloud Sync.`
+      );
       setIsBatchImporting(false);
     }
   };
@@ -1190,7 +1228,7 @@ export const Admin: React.FC = () => {
       const matchesLevel =
         selectedLevelFilter === 'all' || (s.level || 'Level 100') === selectedLevelFilter;
       const matchesStream =
-        selectedStreamFilter === 'all' || (s.stream || 'IT A') === selectedStreamFilter;
+        selectedStreamFilter === 'all' || streamsMatch(s.stream || 'IT A', selectedStreamFilter);
       return matchesSearch && matchesLevel && matchesStream;
     });
 
@@ -1352,6 +1390,13 @@ export const Admin: React.FC = () => {
           >
             <X className="w-4 h-4" />
           </button>
+        </div>
+      )}
+
+      {cloudSyncError && (
+        <div className="bg-amber-50 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-800 rounded-2xl p-3.5 text-xs font-semibold text-amber-900 dark:text-amber-200 flex items-center gap-2.5">
+          <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+          <span>{cloudSyncError}</span>
         </div>
       )}
 
@@ -1629,7 +1674,7 @@ export const Admin: React.FC = () => {
                     const count = students.filter((s) => {
                       const matchesLevel =
                         selectedLevelFilter === 'all' || (s.level || 'Level 100') === selectedLevelFilter;
-                      return matchesLevel && (s.stream || 'IT A') === st;
+                      return matchesLevel && streamsMatch(s.stream || 'IT A', st);
                     }).length;
                     const isActive = selectedStreamFilter === st;
                     return (

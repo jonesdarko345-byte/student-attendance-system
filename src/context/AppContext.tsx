@@ -611,23 +611,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return success;
   }, [timetable, courses, semester]);
 
-  // Persist local offline cache ONLY when user is verified & authorized
+  const hasHydratedLocalRef = useRef(false);
+  const isBatchWritingStudentsRef = useRef(false);
+
+  // Persist local offline cache ONLY when user is verified & local hydration has completed
   useEffect(() => {
-    if (!isAuthorized) return;
+    if (!isAuthorized || !hasHydratedLocalRef.current) return;
     try {
       localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(students));
     } catch {}
   }, [students, isAuthorized]);
 
   useEffect(() => {
-    if (!isAuthorized) return;
+    if (!isAuthorized || !hasHydratedLocalRef.current) return;
     try {
       localStorage.setItem(STORAGE_KEYS.COURSES, JSON.stringify(courses));
     } catch {}
   }, [courses, isAuthorized]);
 
   useEffect(() => {
-    if (!isAuthorized) return;
+    if (!isAuthorized || !hasHydratedLocalRef.current) return;
     try {
       localStorage.setItem(STORAGE_KEYS.TIMETABLE, JSON.stringify(timetable));
       saveTimetableToOfflineStorage(timetable, courses, semester);
@@ -636,21 +639,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [timetable, courses, semester, isAuthorized]);
 
   useEffect(() => {
-    if (!isAuthorized) return;
+    if (!isAuthorized || !hasHydratedLocalRef.current) return;
     try {
       localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify(attendanceRecords));
     } catch {}
   }, [attendanceRecords, isAuthorized]);
 
   useEffect(() => {
-    if (!isAuthorized) return;
+    if (!isAuthorized || !hasHydratedLocalRef.current) return;
     try {
       localStorage.setItem(STORAGE_KEYS.CANCELLED_CLASSES, JSON.stringify(cancelledClasses));
     } catch {}
   }, [cancelledClasses, isAuthorized]);
 
   useEffect(() => {
-    if (!isAuthorized || verifiedRole !== 'hod') return;
+    if (!isAuthorized || !hasHydratedLocalRef.current || verifiedRole !== 'hod') return;
     try {
       localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify(auditLogs));
     } catch {}
@@ -664,7 +667,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [activeTab, verifiedRole]);
 
   useEffect(() => {
-    if (!isAuthorized) return;
+    if (!isAuthorized || !hasHydratedLocalRef.current) return;
     try {
       localStorage.setItem(STORAGE_KEYS.AUTHORIZED, JSON.stringify(authorizedUsers));
     } catch {}
@@ -693,6 +696,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const pendingQrTicketsRef = useRef<Array<Record<string, any>>>([]);
 
   const wipeUnauthorizedState = useCallback(() => {
+    hasHydratedLocalRef.current = false;
     hasStudentsSnapshotRef.current = false;
     hasCoursesSnapshotRef.current = false;
     hasAttendanceSnapshotRef.current = false;
@@ -1186,8 +1190,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (savedAuth) setAuthorizedUsers(JSON.parse(savedAuth));
     } catch {}
 
+    hasHydratedLocalRef.current = true;
     setIsSyncing(true);
     setCloudSyncError(null);
+
+    const sanitizeStudentPayload = (st: Student) => ({
+      id: st.id,
+      name: String(st.name || '').slice(0, 150),
+      indexNumber: String(st.indexNumber || '').slice(0, 50),
+      email: String(st.email || '').slice(0, 120),
+      program: String(st.program || 'BSc Information Technology').slice(0, 120),
+      level: String(st.level || 'Level 100').slice(0, 40),
+      stream: String(st.stream || 'IT A').slice(0, 40),
+      enrolledFingers: Array.isArray(st.enrolledFingers) ? st.enrolledFingers.slice(0, 10) : [],
+      createdAt: String(st.createdAt || new Date().toISOString().split('T')[0]).slice(0, 40)
+    });
 
     // 1. Students Listener
     const unsubStudents = onSnapshot(
@@ -1214,22 +1231,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             list.forEach((s) => cloudIndexMap.set(s.indexNumber.toUpperCase().trim(), s));
 
             const combined: Student[] = [...list];
+            const unsyncedLocal: Student[] = [];
             currentLocal.forEach((loc) => {
               const locKey = loc.indexNumber.toUpperCase().trim();
               if (!cloudIndexMap.has(locKey)) {
                 combined.push(loc);
+                unsyncedLocal.push(loc);
               }
             });
+
+            if (unsyncedLocal.length > 0 && !isBatchWritingStudentsRef.current) {
+              for (let i = 0; i < unsyncedLocal.length; i += 250) {
+                const chunk = unsyncedLocal.slice(i, i + 250);
+                const batch = writeBatch(db);
+                chunk.forEach((st) => {
+                  batch.set(doc(db, 'students', st.id), sanitizeStudentPayload(st));
+                });
+                batch.commit().catch((err) => {
+                  console.warn('[Firestore] Background student merge sync notice:', err);
+                });
+              }
+            }
             return deduplicateStudents(combined);
           });
         } else {
           setStudents((currentLocal) => {
             if (currentLocal.length > 0 && !isClearingRosterRef.current) {
-              const batch = writeBatch(db);
-              currentLocal.slice(0, 450).forEach((st) => {
-                batch.set(doc(db, 'students', st.id), st);
-              });
-              batch.commit().catch(() => {});
+              if (!isBatchWritingStudentsRef.current) {
+                for (let i = 0; i < currentLocal.length; i += 250) {
+                  const chunk = currentLocal.slice(i, i + 250);
+                  const batch = writeBatch(db);
+                  chunk.forEach((st) => {
+                    batch.set(doc(db, 'students', st.id), sanitizeStudentPayload(st));
+                  });
+                  batch.commit().catch((err) => {
+                    console.warn('[Firestore] Background student upload sync notice:', err);
+                  });
+                }
+              }
               return deduplicateStudents(currentLocal);
             }
             return [];
@@ -1240,7 +1279,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       },
       (error) => {
         setIsSyncing(false);
-        setCloudSyncError('Failed to synchronize students');
+        setCloudSyncError('Failed to synchronize students from Firestore');
         console.warn('[Firestore] Students listener sync notice:', error);
       }
     );
@@ -1909,14 +1948,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Audit Log Action (append-only; visible strictly to HOD via Firestore & UI)
+  // Audit Log Action (append-only; non-blocking so audit write errors never abort roster/attendance actions)
   const addAuditLog = async (action: string, details: string, type: AuditLog['type']) => {
     const newLog: AuditLog = {
       id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      action: action.slice(0, 120),
-      details: details.slice(0, 1000),
+      action: (action || 'Activity').slice(0, 120),
+      details: (details || '').slice(0, 1000),
       timestamp: new Date().toISOString(),
-      user: (currentUser.email || currentUser.name || 'Academic Staff').slice(0, 150),
+      user: (currentUser.email || currentUser.name || 'Academic Staff').slice(0, 150) || 'Academic Staff',
       type
     };
 
@@ -1928,7 +1967,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         await setDoc(doc(db, 'auditLogs', newLog.id), newLog);
       } catch (error) {
-        handleFirestoreError(error, OperationType.CREATE, `auditLogs/${newLog.id}`);
+        console.warn(`[Firestore] Audit log write notice for auditLogs/${newLog.id}:`, error);
       }
     }
   };
@@ -1946,7 +1985,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const safeDocId = `std-${rawIdx.replace(/[^a-zA-Z0-9]/g, '_')}-${Date.now().toString(36)}`;
 
     const newStudent: Student = {
-      ...studentData,
       id: safeDocId,
       name: cleanName,
       indexNumber: rawIdx,
@@ -1972,8 +2010,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     try {
       await setDoc(doc(db, 'students', newStudent.id), newStudent);
+      setCloudSyncError(null);
     } catch (error) {
       console.warn('[Firestore] Add student notice:', error);
+      setCloudSyncError('Failed to save student to Cloud Firestore. Please check your connection and try syncing again.');
     }
   };
 
@@ -1984,26 +2024,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const clearExisting = options?.clearExisting || false;
     const updateDuplicates = options?.updateDuplicates ?? true;
 
-    // Collect base students
-    let baseStudents: Student[] = clearExisting ? [] : students;
-    if (!clearExisting) {
-      try {
-        const saved = localStorage.getItem(STORAGE_KEYS.STUDENTS);
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > baseStudents.length) {
-            baseStudents = parsed;
-          }
+    // Collect existing base students BEFORE clearing so clearExisting can delete old records cleanly
+    let existingStudentsSnapshot: Student[] = [...students];
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.STUDENTS);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > existingStudentsSnapshot.length) {
+          existingStudentsSnapshot = parsed;
         }
-      } catch {
-        // ignore
       }
+    } catch {
+      // ignore
     }
 
+    const baseStudents: Student[] = clearExisting ? [] : existingStudentsSnapshot;
     const existingMap = new Map<string, Student>();
-    baseStudents.forEach((s) => existingMap.set(s.indexNumber.toUpperCase().trim(), s));
+    baseStudents.forEach((s) => existingMap.set(s.indexNumber.toUpperCase().trim(), { ...s }));
 
-    const finalRoster: Student[] = clearExisting ? [] : [...baseStudents];
+    const finalRoster: Student[] = clearExisting ? [] : Array.from(existingMap.values());
     const docsToSaveInCloud: Student[] = [];
     let addedCount = 0;
     let updatedCount = 0;
@@ -2024,7 +2063,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (existingStudent) {
         if (updateDuplicates) {
-          // Update properties if provided
           existingStudent.name = cleanName;
           if (item.level) existingStudent.level = item.level.slice(0, 30);
           if (item.stream) existingStudent.stream = item.stream.slice(0, 30);
@@ -2038,12 +2076,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               existingStudent.email = generateInstitutionalEmail(cleanName, cleanIdx);
             }
           }
+          // Ensure ID conforms to isValidId rule: alphanumeric, underscore, hyphen
+          if (!/^[a-zA-Z0-9_\-]+$/.test(existingStudent.id || '')) {
+            existingStudent.id = `std-${cleanIdx.replace(/[^a-zA-Z0-9]/g, '_')}-${Date.now().toString(36)}-${idx}`;
+          }
+          const idxInFinal = finalRoster.findIndex((s) => s.indexNumber.toUpperCase().trim() === cleanIdx);
+          if (idxInFinal >= 0) finalRoster[idxInFinal] = existingStudent;
           docsToSaveInCloud.push(existingStudent);
           updatedCount++;
         }
       } else {
-        // Safe Firestore document ID conforming to isValidId: alphanumeric and hyphens
-        const safeDocId = `std-${cleanIdx.replace(/[^a-zA-Z0-9]/g, '_')}-${Date.now().toString(36)}-${idx}`;
+        const safeDocId = `std-${cleanIdx.replace(/[^a-zA-Z0-9]/g, '_')}-${Date.now().toString(36)}-${idx}`.slice(0, 120);
         const newStudent: Student = {
           id: safeDocId,
           name: cleanName,
@@ -2064,7 +2107,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     if (docsToSaveInCloud.length > 0 || clearExisting) {
-      // 1. Immediately update React state & localStorage for zero UI lag (sorted alphabetically and deduplicated)
+      isBatchWritingStudentsRef.current = true;
+      if (clearExisting) {
+        isClearingRosterRef.current = true;
+      }
+
+      // 1. Immediately update React state & localStorage
       const sorted = deduplicateStudents(finalRoster);
       setStudents(sorted);
       try {
@@ -2073,21 +2121,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         console.warn('LocalStorage save notice:', e);
       }
 
-      await addAuditLog(
-        'Batch Import',
-        `Imported ${addedCount} student(s) into class roster (${updatedCount} updated)`,
-        'student'
-      );
-
       // 2. Persist to Firestore in safe chunked batches of 250 (Firestore limit is 500)
       try {
-        if (clearExisting && baseStudents.length > 0) {
-          for (let i = 0; i < baseStudents.length; i += 250) {
-            const chunk = baseStudents.slice(i, i + 250);
-            const batch = writeBatch(db);
-            chunk.forEach((s) => batch.delete(doc(db, 'students', s.id)));
-            await batch.commit();
+        if (clearExisting) {
+          const cloudExistingSnap = await getDocs(collection(db, 'students'));
+          const refsToDelete = cloudExistingSnap.docs.map((d) => d.ref);
+          for (let i = 0; i < refsToDelete.length; i += 250) {
+            const chunk = refsToDelete.slice(i, i + 250);
+            const delBatch = writeBatch(db);
+            chunk.forEach((r) => delBatch.delete(r));
+            await delBatch.commit();
           }
+          isClearingRosterRef.current = false;
         }
 
         const CHUNK_SIZE = 250;
@@ -2095,15 +2140,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const chunk = docsToSaveInCloud.slice(i, i + CHUNK_SIZE);
           const batch = writeBatch(db);
           chunk.forEach((student) => {
-            batch.set(doc(db, 'students', student.id), student);
+            const safeId = /^[a-zA-Z0-9_\-]+$/.test(student.id || '')
+              ? student.id.slice(0, 120)
+              : `std-${student.indexNumber.replace(/[^a-zA-Z0-9]/g, '_')}-${Date.now().toString(36)}`.slice(0, 120);
+            batch.set(doc(db, 'students', safeId), {
+              id: safeId,
+              name: String(student.name || '').slice(0, 150),
+              indexNumber: String(student.indexNumber || '').slice(0, 50),
+              email: String(student.email || '').slice(0, 120),
+              program: String(student.program || 'BSc Information Technology').slice(0, 120),
+              level: String(student.level || 'Level 100').slice(0, 40),
+              stream: String(student.stream || 'IT A').slice(0, 40),
+              enrolledFingers: Array.isArray(student.enrolledFingers) ? student.enrolledFingers.slice(0, 10) : [],
+              createdAt: String(student.createdAt || new Date().toISOString().split('T')[0]).slice(0, 40)
+            });
           });
           await batch.commit();
         }
+        setCloudSyncError(null);
         console.log(`[Firestore] Committed ${docsToSaveInCloud.length} batch students to Cloud Firestore.`);
       } catch (error) {
-        console.warn('[Firestore] Batch save notice, data preserved in local storage:', error);
-        setCloudSyncError('Cloud sync notice: Students stored locally, will sync to cloud.');
+        isClearingRosterRef.current = false;
+        console.error('[Firestore] Batch save failed (students preserved locally):', error);
+        setCloudSyncError(
+          'Students saved on this device, but Cloud Firestore sync failed. Click Force Cloud Sync in Database settings or verify your connection.'
+        );
+        throw error;
+      } finally {
+        isBatchWritingStudentsRef.current = false;
+        isClearingRosterRef.current = false;
       }
+
+      // 3. Log audit trail asynchronously after students are committed
+      addAuditLog(
+        'Batch Import',
+        `Imported ${addedCount} student(s) into class roster (${updatedCount} updated)`,
+        'student'
+      ).catch(() => {});
     }
     return addedCount + updatedCount;
   };
@@ -2312,9 +2385,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     try {
       const snap = await getDocs(collection(db, 'students'));
-      const batch = writeBatch(db);
-      snap.forEach((d) => batch.delete(d.ref));
-      await batch.commit();
+      const refs = snap.docs.map((d) => d.ref);
+      for (let i = 0; i < refs.length; i += 250) {
+        const chunk = refs.slice(i, i + 250);
+        const batch = writeBatch(db);
+        chunk.forEach((ref) => batch.delete(ref));
+        await batch.commit();
+      }
     } catch (error) {
       console.warn('[Firestore] Clear students notice:', error);
     }
@@ -2341,7 +2418,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updateAllStudentEmailsToNameBased = async (): Promise<number> => {
     let count = 0;
-    const batch = writeBatch(db);
+    const modifiedDocs: Student[] = [];
     const updated = students.map((s) => {
       const idxSlug = (s.indexNumber || '').toLowerCase().replace(/[^a-z0-9]/g, '');
       const cur = (s.email || '').toLowerCase().trim();
@@ -2356,7 +2433,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (newEmail !== cur) {
           count++;
           const mod = { ...s, email: newEmail };
-          batch.set(doc(db, 'students', s.id), mod, { merge: true });
+          modifiedDocs.push(mod);
           return mod;
         }
       }
@@ -2371,7 +2448,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         console.warn('LocalStorage save notice:', e);
       }
       try {
-        await batch.commit();
+        for (let i = 0; i < modifiedDocs.length; i += 250) {
+          const chunk = modifiedDocs.slice(i, i + 250);
+          const batch = writeBatch(db);
+          chunk.forEach((mod) => {
+            batch.set(doc(db, 'students', mod.id), { email: mod.email.slice(0, 120) }, { merge: true });
+          });
+          await batch.commit();
+        }
       } catch (err) {
         console.warn('[Firestore] Batch commit email notice:', err);
       }
@@ -3065,41 +3149,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   checkInStudentWithIndexRef.current = checkInStudentWithIndex;
 
-  // Database Management Functions
+  // Database Management Functions (chunked at 250 writes per batch so large rosters never exceed Firestore's 500-op limit)
   const forceSyncCloudDatabase = async (): Promise<{ success: boolean; count: number; error?: string }> => {
     setIsSyncing(true);
     try {
-      const batch = writeBatch(db);
-      let count = 0;
+      const writes: Array<{ ref: ReturnType<typeof doc>; data: Record<string, unknown>; merge?: boolean }> = [];
 
       students.forEach((s) => {
-        batch.set(doc(db, 'students', s.id), s);
-        count++;
+        const safeId = /^[a-zA-Z0-9_\-]+$/.test(s.id || '')
+          ? s.id.slice(0, 120)
+          : `std-${(s.indexNumber || 'row').replace(/[^a-zA-Z0-9]/g, '_')}`.slice(0, 120);
+        writes.push({
+          ref: doc(db, 'students', safeId),
+          data: {
+            id: safeId,
+            name: String(s.name || '').slice(0, 150),
+            indexNumber: String(s.indexNumber || '').slice(0, 50),
+            email: String(s.email || '').slice(0, 120),
+            program: String(s.program || 'BSc Information Technology').slice(0, 120),
+            level: String(s.level || 'Level 100').slice(0, 40),
+            stream: String(s.stream || 'IT A').slice(0, 40),
+            enrolledFingers: Array.isArray(s.enrolledFingers) ? s.enrolledFingers.slice(0, 10) : [],
+            createdAt: String(s.createdAt || new Date().toISOString().split('T')[0]).slice(0, 40)
+          }
+        });
       });
 
-      courses.forEach((c) => {
-        batch.set(doc(db, 'courses', c.id), c);
-        count++;
-      });
-
-      timetable.forEach((t) => {
-        batch.set(doc(db, 'timetable', t.id), t);
-        count++;
-      });
-
-      attendanceRecords.forEach((a) => {
-        batch.set(doc(db, 'attendance', a.id), a);
-        count++;
-      });
+      courses.forEach((c) => writes.push({ ref: doc(db, 'courses', c.id), data: { ...c } }));
+      timetable.forEach((t) => writes.push({ ref: doc(db, 'timetable', t.id), data: { ...t } }));
+      attendanceRecords.forEach((a) => writes.push({ ref: doc(db, 'attendance', a.id), data: { ...a } }));
 
       authorizedUsers.forEach((u) => {
-        batch.set(doc(db, 'authorizedUsers', u.id), u);
-        count++;
+        writes.push({ ref: doc(db, 'authorizedUsers', u.id), data: { ...u } });
         const cleanEmail = (u.email || '').toLowerCase().trim();
         if (cleanEmail) {
-          batch.set(
-            doc(db, 'authorizedEmails', cleanEmail),
-            {
+          writes.push({
+            ref: doc(db, 'authorizedEmails', cleanEmail),
+            data: {
               email: cleanEmail,
               name: u.name,
               role: u.role,
@@ -3112,26 +3198,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               userDocId: u.id,
               addedAt: u.addedAt || new Date().toISOString().split('T')[0]
             },
-            { merge: true }
-          );
-          count++;
+            merge: true
+          });
         }
       });
 
       auditLogs.slice(0, 30).forEach((l) => {
-        batch.set(doc(db, 'auditLogs', l.id), l);
-        count++;
+        writes.push({ ref: doc(db, 'auditLogs', l.id), data: { ...l } });
       });
 
-      if (count > 0) {
+      for (let i = 0; i < writes.length; i += 250) {
+        const chunk = writes.slice(i, i + 250);
+        const batch = writeBatch(db);
+        chunk.forEach((w) => {
+          if (w.merge) {
+            batch.set(w.ref, w.data, { merge: true });
+          } else {
+            batch.set(w.ref, w.data);
+          }
+        });
         await batch.commit();
       }
+
+      setCloudSyncError(null);
       setIsCloudConnected(true);
-      await addAuditLog('Cloud Database Synchronized', `Synchronized ${count} record(s) to Firestore Cloud database`, 'system');
-      return { success: true, count };
+      await addAuditLog('Cloud Database Synchronized', `Synchronized ${writes.length} record(s) to Firestore Cloud database`, 'system');
+      return { success: true, count: writes.length };
     } catch (err: unknown) {
       console.error('Force cloud sync error:', err);
       const message = err instanceof Error ? err.message : 'Database synchronization failed';
+      setCloudSyncError(`Cloud sync failed: ${message}`);
       return { success: false, count: 0, error: message };
     } finally {
       setIsSyncing(false);

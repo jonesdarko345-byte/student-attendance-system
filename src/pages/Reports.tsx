@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
+import { streamsMatch } from '../utils/timetableHelper';
 import {
   BarChart3,
   Download,
@@ -53,7 +54,7 @@ export const Reports: React.FC = () => {
   const relevantRecords = attendanceRecords.filter((record) => {
     if (selectedCourseFilter !== 'all' && record.courseId !== selectedCourseFilter) return false;
     if (selectedStreamFilter !== 'all') {
-      return !record.stream || record.stream === 'all' || record.stream === selectedStreamFilter;
+      return streamsMatch(record.stream, selectedStreamFilter);
     }
     return true;
   });
@@ -64,7 +65,7 @@ export const Reports: React.FC = () => {
       .filter((c) => {
         if (selectedCourseFilter !== 'all' && c.courseId !== selectedCourseFilter) return false;
         if (selectedStreamFilter !== 'all') {
-          return !c.stream || c.stream === 'all' || c.stream === selectedStreamFilter;
+          return streamsMatch(c.stream, selectedStreamFilter);
         }
         return true;
       })
@@ -75,7 +76,7 @@ export const Reports: React.FC = () => {
   const filteredStudents = useMemo(() => {
     const list = students.filter((student) => {
       const matchesLevel = selectedLevelFilter === 'all' || (student.level || 'Level 100') === selectedLevelFilter;
-      const matchesStream = selectedStreamFilter === 'all' || (student.stream || 'IT A') === selectedStreamFilter;
+      const matchesStream = selectedStreamFilter === 'all' || streamsMatch(student.stream || 'IT A', selectedStreamFilter);
       return matchesLevel && matchesStream;
     });
     return [...list].sort((a, b) => {
@@ -107,7 +108,7 @@ export const Reports: React.FC = () => {
     let attended = 0;
     // Relevant sessions for THIS student's stream
     const studentSessions = relevantRecords.filter(
-      (rec) => !rec.stream || rec.stream === 'all' || rec.stream === (student.stream || 'IT A')
+      (rec) => streamsMatch(rec.stream, student.stream || 'IT A')
     );
     const totalSessions = studentSessions.length;
 

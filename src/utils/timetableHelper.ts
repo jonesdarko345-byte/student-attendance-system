@@ -15,6 +15,24 @@ export const timeStringToMinutes = (timeStr?: string): number => {
  * Normalizes known stream/division aliases (e.g. "IT A", "L200 IT-A", "IT 200 A")
  * so timetable slots, student records, and attendance sessions align consistently.
  */
+export const normalizeStreamKey = (stream?: string): string => {
+  if (!stream) return '';
+  const norm = stream.trim().toLowerCase().replace(/[\-_]+/g, ' ').replace(/\s+/g, ' ');
+  if (norm === 'all' || norm === 'all streams') return 'all';
+
+  // Extract division letter A-F for IT/Stream/Division/Level-prefixed labels
+  // e.g. "IT A", "IT-A", "Stream A", "L200 IT-A", "L200 ITA", "IT 200 A", "Level 200 Stream A", "Division A"
+  const match = norm.match(
+    /^(?:(?:level\s*[1-4]00|l\s*[1-4]00|[1-4]00)\s*)?(?:it|stream|division|div|group|grp)?\s*([a-f])(?:\s*(?:level\s*[1-4]00|l\s*[1-4]00|[1-4]00))?$/i
+  ) || norm.match(
+    /^(?:level\s*[1-4]00|l\s*[1-4]00|[1-4]00)?\s*it\s*(?:level\s*[1-4]00|l\s*[1-4]00|[1-4]00)?\s*([a-f])$/i
+  );
+  if (match && match[1]) {
+    return `it ${match[1].toLowerCase()}`;
+  }
+  return norm;
+};
+
 export const streamsMatch = (recordStream?: string, requestedStream?: string): boolean => {
   if (
     !requestedStream ||
@@ -27,14 +45,10 @@ export const streamsMatch = (recordStream?: string, requestedStream?: string): b
   if (!recordStream || recordStream === 'all') return true;
   if (recordStream === requestedStream) return true;
 
-  const normRec = recordStream.trim().toLowerCase().replace(/\s+/g, ' ');
-  const normReq = requestedStream.trim().toLowerCase().replace(/\s+/g, ' ');
+  const normRec = normalizeStreamKey(recordStream);
+  const normReq = normalizeStreamKey(requestedStream);
   if (normRec === normReq) return true;
 
-  const streamAAliases = ['it a', 'l200 it-a', 'l200 ita', 'it 200 a'];
-  if (streamAAliases.includes(normRec) && streamAAliases.includes(normReq)) {
-    return true;
-  }
   return false;
 };
 

@@ -190,6 +190,36 @@ export function generateInstitutionalEmail(nameOrIndex: string, indexNumber?: st
 export const generateStudentEmail = generateInstitutionalEmail;
 
 /**
+ * Detects Academic Level & Stream hints from a filename, sheet title, or header banner
+ * e.g. "Level 200 Stream A Roster.xlsx" or "L200 IT-A CLASS LIST"
+ */
+export function detectCohortHints(sourceText: string): { level?: string; stream?: string } {
+  if (!sourceText) return {};
+  const sample = sourceText.slice(0, 1200);
+  let level: string | undefined;
+  let stream: string | undefined;
+
+  const levelMatch = sample.match(/\b(?:level|lvl|l)\s*[-_]?\s*(100|200|300|400)\b/i);
+  if (levelMatch) {
+    level = `Level ${levelMatch[1]}`;
+  } else {
+    const yearMatch = sample.match(/\byear\s*([1-4])\b/i);
+    if (yearMatch) {
+      level = `Level ${parseInt(yearMatch[1], 10) * 100}`;
+    }
+  }
+
+  const streamMatch = sample.match(
+    /\b(?:stream|division|div|group|grp|it(?:\s*200|\s*100|\s*300|\s*400)?)\s*[-_]?\s*([a-f])\b/i
+  );
+  if (streamMatch) {
+    stream = `IT ${streamMatch[1].toUpperCase()}`;
+  }
+
+  return { level, stream };
+}
+
+/**
  * Main Universal Parser for text input (CSV, TSV, space-separated, copied table)
  */
 export function parseStudentRoster(
@@ -224,8 +254,9 @@ export function parseStudentRoster(
       continue;
     }
 
-    // Strip leading list numbering like "1. ", "01) ", "#1 - ", "1: ", "1\t"
-    let cleanLine = rawLine.replace(/^#?\d+[\.\)\-\:\s\t]+\s*/, '').trim();
+    // Strip leading serial numbering ONLY (1-4 digits followed by delimiter like "1. ", "01) ", "#1 - ", "1: ", "1\t")
+    // Never strip 5+ digit numeric index numbers like "2024001234\tKwame Mensah"
+    let cleanLine = rawLine.replace(/^\s*#?\d{1,4}(?:[\.\)\:]\s*|\s+-\s+|\t+)\s*/, '').trim();
     if (!cleanLine) continue;
 
     // Detect delimiter
@@ -239,7 +270,6 @@ export function parseStudentRoster(
       tokens = cleanLine.split(/[;|]+/).map((t) => t.trim()).filter(Boolean);
     } else if (cleanLine.includes(',')) {
       // Comma separated - careful not to split inside quotes
-      // Simple regex for CSV tokens
       tokens = cleanLine
         .split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/)
         .map((t) => t.replace(/^["']|["']$/g, '').trim())
@@ -251,27 +281,8 @@ export function parseStudentRoster(
       // Multi-space separated
       tokens = cleanLine.split(/\s{2,}/).map((t) => t.trim()).filter(Boolean);
     } else {
-      // Single space separated: e.g. "UEB3100122 Kwame Mensah" or "Kwame Mensah UEB3100122"
-      const spaceParts = cleanLine.split(/\s+/).filter(Boolean);
-
-      if (spaceParts.length >= 2) {
-        // Check if first token is index number
-        if (isLikelyIndexNumber(spaceParts[0])) {
-          const idx = spaceParts[0];
-          const name = spaceParts.slice(1).join(' ');
-          tokens = [idx, name];
-        }
-        // Check if last token is index number
-        else if (isLikelyIndexNumber(spaceParts[spaceParts.length - 1])) {
-          const idx = spaceParts[spaceParts.length - 1];
-          const name = spaceParts.slice(0, spaceParts.length - 1).join(' ');
-          tokens = [name, idx];
-        } else {
-          tokens = spaceParts;
-        }
-      } else {
-        tokens = [cleanLine];
-      }
+      // Single space separated: e.g. "UEB3100122 Kwame Mensah" or "Kwame Mensah UEB3100122 Level 200 Stream A"
+      tokens = cleanLine.split(/\s+/).filter(Boolean);
     }
 
     // Process tokens to identify components
@@ -286,7 +297,7 @@ export function parseStudentRoster(
       const token = tokens[t].trim();
       if (!token) continue;
 
-      // Skip row numbers if left over at beginning
+      // Skip row numbers if left over at beginning (max 4 digits so numeric index numbers are preserved)
       if (/^\d{1,4}\.?$/.test(token) && t === 0 && tokens.length > 2) {
         continue;
       }
@@ -308,10 +319,28 @@ export function parseStudentRoster(
         continue;
       }
 
-      // Check for Level (e.g. Level 100, 100, Level 200, L100, Year 1)
+      // Check for combined Level + Stream token (e.g. "L200 IT-A", "Level 200 Stream A", "IT 200 A", "200A")
+      const combinedMatch = token.match(
+        /^(?:(?:level|l)\s*([1-4]00)|([1-4]00))\s*[-_]?\s*(?:it|stream|division|div|group|grp)?\s*[-_]?\s*([a-f])$/i
+      ) || token.match(
+        /^it\s*[-_]?\s*([1-4]00)\s*[-_]?\s*([a-f])$/i
+      );
+      if (combinedMatch) {
+        const lvlDigits = combinedMatch[1] || combinedMatch[2];
+        const streamLetter = combinedMatch[3] || combinedMatch[2];
+        if (lvlDigits && /^[1-4]00$/.test(lvlDigits)) {
+          detectedLevel = `Level ${lvlDigits}`;
+        }
+        if (streamLetter && /^[a-f]$/i.test(streamLetter)) {
+          detectedStream = `IT ${streamLetter.toUpperCase()}`;
+        }
+        continue;
+      }
+
+      // Check for Level (e.g. Level 100, 100, Level 200, L200, Year 2)
       if (
         /^(level\s*)?(100|200|300|400)$/i.test(token) ||
-        /^L(100|200|300|400)$/i.test(token) ||
+        /^L\s*(100|200|300|400)$/i.test(token) ||
         /^year\s*[1-4]$/i.test(token)
       ) {
         const numMatch = token.match(/100|200|300|400/);
@@ -326,29 +355,49 @@ export function parseStudentRoster(
         continue;
       }
 
-      // Check for Stream (e.g. IT A, IT B, Stream A, Division A, Group A)
-      if (/^(IT\s*[A-Fa-f]|Stream\s*[A-Fa-f]|Division\s*[A-Fa-f]|Group\s*[A-Fa-f])$/i.test(token)) {
-        const letterMatch = token.match(/[A-Fa-f]/i);
+      // Check for Stream (e.g. IT A, IT-A, IT B, Stream A, Division A, Group A)
+      if (/^(?:IT|Stream|Division|Div|Group|Grp)\s*[\-_]?\s*([A-Fa-f])$/i.test(token)) {
+        const letterMatch = token.match(/([A-Fa-f])$/i);
         if (letterMatch) {
-          detectedStream = `IT ${letterMatch[0].toUpperCase()}`;
+          detectedStream = `IT ${letterMatch[1].toUpperCase()}`;
         }
         continue;
       }
-      if (/^[A-Fa-f]$/i.test(token) && tokens.length >= 3) {
+      // Standalone single letter A-F: only treat as Stream when it's at the trailing columns of a multi-column row
+      if (/^[A-Fa-f]$/i.test(token) && tokens.length >= 3 && t >= tokens.length - 2) {
         detectedStream = `IT ${token.toUpperCase()}`;
         continue;
       }
 
-      // Check for Program
-      if (/^(BSc|Bachelor|Diploma|Certificate|Computer|IT|Information|Engineering)/i.test(token)) {
+      // Check for Index Number BEFORE Program keywords so IT-prefixed IDs (e.g. IT2024001) are never mistaken for Program
+      if (!detectedIndex && isLikelyIndexNumber(token)) {
+        detectedIndex = token.toUpperCase().trim();
+        continue;
+      }
+
+      // Check for Program (must not look like an index number)
+      if (/^(B\.?Sc\.?|Bachelor|Diploma|Certificate|Computer|Information Technology|Information|Engineering|B\.?Tech|IT\s+(?:Studies|Dept|Department|Program|Programme))/i.test(token)) {
         detectedProgram = token;
         continue;
       }
 
-      // Check for Index Number
-      if (!detectedIndex && isLikelyIndexNumber(token)) {
-        detectedIndex = token.toUpperCase().trim();
-        continue;
+      // Also skip bare trailing metadata words in single-space pasted lines (e.g. "Level", "Stream")
+      if (
+        /^(level|stream|division)$/i.test(token) &&
+        t + 1 < tokens.length &&
+        (/^(100|200|300|400|[a-f])$/i.test(tokens[t + 1].trim()))
+      ) {
+        const nextTok = tokens[t + 1].trim();
+        if (/^level$/i.test(token) && /^(100|200|300|400)$/.test(nextTok)) {
+          detectedLevel = `Level ${nextTok}`;
+          t++;
+          continue;
+        }
+        if (/^(stream|division)$/i.test(token) && /^[a-f]$/i.test(nextTok)) {
+          detectedStream = `IT ${nextTok.toUpperCase()}`;
+          t++;
+          continue;
+        }
       }
 
       // Otherwise, assume it's part of the student's name
@@ -421,47 +470,81 @@ export async function parseUploadedFile(
     defaultStream?: string;
     defaultProgram?: string;
   } = {}
-): Promise<{ text: string; result: ParseResult }> {
+): Promise<{ text: string; result: ParseResult; detectedHints?: { level?: string; stream?: string } }> {
   const fileName = file.name.toLowerCase();
   const isExcel = fileName.endsWith('.xlsx') || fileName.endsWith('.xls');
+  const fileHints = detectCohortHints(file.name);
+  const initialDefaults = {
+    defaultLevel: defaults.defaultLevel || fileHints.level,
+    defaultStream: defaults.defaultStream || fileHints.stream,
+    defaultProgram: defaults.defaultProgram
+  };
 
   if (isExcel) {
     const arrayBuffer = await file.arrayBuffer();
     const workbook = XLSX.read(arrayBuffer, { type: 'array' });
 
-    // Use the first worksheet
-    const firstSheetName = workbook.SheetNames[0];
-    if (!firstSheetName) {
+    if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
       throw new Error('Excel workbook contains no sheets.');
     }
-    const worksheet = workbook.Sheets[firstSheetName];
 
-    // Convert sheet to array of rows (each row is an array of cell values)
-    const rawRows = XLSX.utils.sheet_to_json<(string | number)[]>(worksheet, {
-      header: 1,
-      blankrows: false,
-      raw: false
-    });
+    // Scan all sheets and combine or select sheets containing valid student rows
+    let bestText = '';
+    let bestResult: ParseResult = { valid: [], skippedHeaders: 0, invalidLines: [], duplicateCount: 0 };
+    let detectedHints = { ...fileHints };
 
-    // Format rows into tab-separated text for consistent universal parsing
-    const textLines: string[] = [];
-    for (const row of rawRows) {
-      if (!Array.isArray(row)) continue;
-      const cells = row.map((cell) => (cell !== null && cell !== undefined ? String(cell).trim() : ''));
-      // Only keep rows that have at least one non-empty cell
-      if (cells.some((c) => c.length > 0)) {
-        textLines.push(cells.join('\t'));
+    for (const sheetName of workbook.SheetNames) {
+      const worksheet = workbook.Sheets[sheetName];
+      if (!worksheet) continue;
+
+      const rawRows = XLSX.utils.sheet_to_json<(string | number)[]>(worksheet, {
+        header: 1,
+        blankrows: false,
+        raw: false
+      });
+
+      const textLines: string[] = [];
+      for (const row of rawRows) {
+        if (!Array.isArray(row)) continue;
+        const cells = row.map((cell) => (cell !== null && cell !== undefined ? String(cell).trim() : ''));
+        if (cells.some((c) => c.length > 0)) {
+          textLines.push(cells.join('\t'));
+        }
+      }
+
+      const sheetText = textLines.join('\n');
+      if (!sheetText.trim()) continue;
+
+      const sheetHints = detectCohortHints(`${file.name}\n${sheetName}\n${sheetText}`);
+      const effectiveDefaults = {
+        defaultLevel: defaults.defaultLevel || sheetHints.level || initialDefaults.defaultLevel,
+        defaultStream: defaults.defaultStream || sheetHints.stream || initialDefaults.defaultStream,
+        defaultProgram: defaults.defaultProgram
+      };
+
+      const sheetResult = parseStudentRoster(sheetText, effectiveDefaults);
+      if (sheetResult.valid.length > bestResult.valid.length || (!bestText && sheetText)) {
+        bestText = sheetText;
+        bestResult = sheetResult;
+        detectedHints = {
+          level: sheetHints.level || fileHints.level,
+          stream: sheetHints.stream || fileHints.stream
+        };
       }
     }
 
-    const fullText = textLines.join('\n');
-    const result = parseStudentRoster(fullText, defaults);
-    return { text: fullText, result };
+    return { text: bestText, result: bestResult, detectedHints };
   } else {
     // CSV, TSV, or TXT file
     const text = await file.text();
-    const result = parseStudentRoster(text, defaults);
-    return { text, result };
+    const textHints = detectCohortHints(`${file.name}\n${text}`);
+    const effectiveDefaults = {
+      defaultLevel: defaults.defaultLevel || textHints.level || initialDefaults.defaultLevel,
+      defaultStream: defaults.defaultStream || textHints.stream || initialDefaults.defaultStream,
+      defaultProgram: defaults.defaultProgram
+    };
+    const result = parseStudentRoster(text, effectiveDefaults);
+    return { text, result, detectedHints: textHints };
   }
 }
 

@@ -191,8 +191,8 @@ export const Header: React.FC = () => {
       className="sticky top-0 z-50 w-full bg-[#003b5c] text-white shadow-md border-b border-[#002840]"
       style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}
     >
-      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between gap-2 lg:gap-4 min-h-[60px] h-16">
+      <div className="max-w-7xl w-full mx-auto px-2.5 sm:px-6 lg:px-8">
+        <div className="flex items-center justify-between gap-2 lg:gap-4 min-h-[56px] h-15 sm:h-16 w-full min-w-0">
           
           {/* Logo & School Title */}
           <button
@@ -201,11 +201,11 @@ export const Header: React.FC = () => {
               if (isRoleMenuOpen) setIsRoleMenuOpen(false);
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
-            className="flex items-center gap-2 sm:gap-2.5 text-left focus:outline-none group cursor-pointer min-w-0 flex-1 lg:flex-none min-h-[40px] py-1 active:scale-95 transition-transform duration-150 shrink-0"
+            className="flex items-center gap-2 sm:gap-2.5 text-left focus:outline-none group cursor-pointer min-w-0 flex-1 lg:flex-none lg:shrink-0 min-h-[40px] py-1 active:scale-95 transition-transform duration-150"
             title="Return to Dashboard"
             aria-label="Return to UENR Attendance Dashboard"
           >
-            <div className="relative flex-shrink-0 w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-white p-1 shadow-sm border border-emerald-500/30 flex items-center justify-center overflow-hidden group-hover:scale-105 transition-transform duration-150">
+            <div className="relative flex-shrink-0 w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-white p-1 shadow-sm border border-emerald-500/30 flex items-center justify-center overflow-hidden group-hover:scale-105 transition-transform duration-150">
               <img
                 src="/assets/uenr_logo.jpg"
                 alt="UENR Logo"
@@ -216,7 +216,7 @@ export const Header: React.FC = () => {
               />
             </div>
             <div className="flex flex-col min-w-0">
-              <span className="font-extrabold text-sm sm:text-base xl:text-lg tracking-tight text-white group-hover:text-emerald-300 transition-colors truncate whitespace-nowrap">
+              <span className="font-extrabold text-[13px] sm:text-base xl:text-lg tracking-tight text-white group-hover:text-emerald-300 transition-colors truncate">
                 UENR Attendance
               </span>
               <span className="text-[11px] text-slate-300 font-medium truncate hidden sm:inline lg:hidden 2xl:inline">
@@ -266,11 +266,11 @@ export const Header: React.FC = () => {
             {/* Compact Network & Cloud Status Indicator */}
             {!isOnline ? (
               <div
-                className="flex items-center gap-1 px-2 py-1.5 rounded-xl bg-amber-500/25 border border-amber-400/50 text-[11px] font-bold text-amber-200 shrink-0 whitespace-nowrap"
+                className="flex items-center gap-1 px-1.5 sm:px-2 py-1 rounded-xl bg-amber-500/25 border border-amber-400/50 text-[10px] sm:text-[11px] font-bold text-amber-200 shrink-0 whitespace-nowrap"
                 title="Device is offline. Showing locally saved timetable and data."
               >
                 <WifiOff className="w-3.5 h-3.5 text-amber-300 shrink-0" />
-                <span>Offline</span>
+                <span className="hidden sm:inline">Offline</span>
               </div>
             ) : isPoorConnection ? (
               <div
@@ -301,7 +301,7 @@ export const Header: React.FC = () => {
             <button
               type="button"
               onClick={toggleTheme}
-              className="flex items-center justify-center w-10 h-10 sm:w-9 sm:h-9 rounded-xl bg-black/25 hover:bg-black/40 border border-white/15 text-slate-200 hover:text-amber-300 transition-all duration-200 cursor-pointer relative group shrink-0"
+              className="flex items-center justify-center w-9 h-9 rounded-xl bg-black/25 hover:bg-black/40 border border-white/15 text-slate-200 hover:text-amber-300 transition-all duration-200 cursor-pointer relative group shrink-0"
               title={isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode for low-light environment"}
               aria-label="Toggle light and dark mode"
             >
@@ -317,7 +317,7 @@ export const Header: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setIsRoleMenuOpen(!isRoleMenuOpen)}
-                className="flex items-center gap-1.5 sm:gap-2 min-h-[40px] px-2 sm:px-2.5 py-1.5 rounded-xl bg-[#006b78] hover:bg-[#007c82] active:bg-[#005761] text-white text-xs font-medium border border-teal-400/40 transition-colors shadow-sm cursor-pointer whitespace-nowrap"
+                className="flex items-center gap-1 sm:gap-2 min-h-[38px] sm:min-h-[40px] px-1.5 sm:px-2.5 py-1 sm:py-1.5 rounded-xl bg-[#006b78] hover:bg-[#007c82] active:bg-[#005761] text-white text-xs font-medium border border-teal-400/40 transition-colors shadow-sm cursor-pointer whitespace-nowrap"
                 title="Switch active role and account options"
                 aria-label="Switch active role and account options"
                 aria-expanded={isRoleMenuOpen}
@@ -338,8 +338,8 @@ export const Header: React.FC = () => {
                 </div>
 
                 {/* Mobile View: Prominent Role Badge + Down Chevron */}
-                <div className="flex md:hidden items-center gap-1">
-                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wide border shadow-xs ${currentRoleMeta.bg}`}>
+                <div className="flex md:hidden items-center gap-0.5">
+                  <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wide border shadow-xs ${currentRoleMeta.bg}`}>
                     {currentRoleMeta.label}
                   </span>
                   <ChevronDown className={`w-3.5 h-3.5 text-emerald-300 transition-transform duration-200 ${isRoleMenuOpen ? 'rotate-180' : ''}`} />
