@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ShieldCheck, GraduationCap, Lock, FileText, X, CheckCircle2, AlertCircle, Building2, User } from 'lucide-react';
+import { useApp } from '../context/AppContext';
+import { ShieldCheck, GraduationCap, Lock, FileText, X, CheckCircle2, AlertCircle, Building2, User, Mail } from 'lucide-react';
 
 export const Footer: React.FC = () => {
+  const { openContactModal } = useApp();
   const currentYear = new Date().getFullYear();
   const [showLicenseModal, setShowLicenseModal] = useState(false);
   const modalBodyRef = useRef<HTMLDivElement | null>(null);
@@ -163,7 +165,16 @@ export const Footer: React.FC = () => {
             <p>
               Official course management & biometric attendance portal for the University of Energy and Natural Resources (UENR).
             </p>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 flex-wrap justify-center">
+              <button
+                type="button"
+                onClick={() => openContactModal()}
+                className="inline-flex items-center gap-1 font-semibold text-[#007c82] dark:text-teal-400 hover:underline underline-offset-2 transition-colors cursor-pointer"
+              >
+                <Mail className="w-3.5 h-3.5" />
+                <span>Contact &amp; Review</span>
+              </button>
+              <span>·</span>
               <button
                 type="button"
                 onClick={() => setShowLicenseModal(true)}

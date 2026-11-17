@@ -9,6 +9,7 @@
 - **Attendance Accountability**: An attendance record must reference a valid courseId and date. When `isFinalized == true`, only authorized HOD/admin staff can alter or unlock the session.
 - **Isolated QR Check-In Tickets**: Student devices in QR check-in mode can only submit a `pending` ticket in `/qrCheckIns/{ticketId}` and can only read their own ticket (`submitterUid == request.auth.uid`), preventing roster scraping or reading other students' records.
 - **Audit Immutability**: Audit logs once created cannot be updated by anyone, and can only be deleted by the HOD/admin.
+- **Private Contact & Review Inbox**: Anyone using the portal (students, guests, class reps, lecturers) can create a validated `new` message in `/contactMessages/{messageId}`, while only the HOD/Admin can read, list, update status/adminNote, or delete messages—preventing PII/feedback scraping.
 
 ---
 

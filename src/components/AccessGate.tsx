@@ -24,7 +24,8 @@ import {
   X,
   Building2,
   Users,
-  KeyRound
+  KeyRound,
+  Mail
 } from 'lucide-react';
 
 export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -39,7 +40,8 @@ export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }
     logoutUser,
     switchAccount,
     isDarkMode,
-    toggleTheme
+    toggleTheme,
+    openContactModal
   } = useApp();
 
   const [authError, setAuthError] = useState<string | null>(null);
@@ -475,6 +477,15 @@ export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }
                 <span>Sign Out</span>
               </button>
             </div>
+
+            <button
+              type="button"
+              onClick={() => openContactModal('access_request')}
+              className="w-full py-2 px-3 rounded-xl text-[#007c82] dark:text-teal-400 hover:bg-teal-50 dark:hover:bg-teal-950/30 font-bold text-[11px] transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <Mail className="w-3.5 h-3.5" />
+              <span>Need Help? Contact &amp; Review HOD Admin</span>
+            </button>
           </div>
         </div>
       </div>
@@ -543,6 +554,15 @@ export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }
                 <LogOut className="w-4 h-4" />
                 <span>Sign Out &amp; Return to Landing Page</span>
               </button>
+
+              <button
+                type="button"
+                onClick={() => openContactModal('access_request')}
+                className="w-full py-2.5 px-4 rounded-xl border border-teal-200 dark:border-teal-800/70 bg-teal-50/70 dark:bg-teal-950/30 hover:bg-teal-100 dark:hover:bg-teal-950/60 text-[#007c82] dark:text-teal-300 font-bold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Mail className="w-4 h-4" />
+                <span>Request Access / Contact HOD Admin</span>
+              </button>
             </div>
           </div>
         </div>
@@ -578,6 +598,17 @@ export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => openContactModal()}
+              className="px-3 py-2 rounded-xl bg-black/20 hover:bg-black/35 border border-white/15 text-slate-100 hover:text-white text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer"
+              title="Contact Department Admin or Submit Review"
+            >
+              <Mail className="w-3.5 h-3.5 text-emerald-300" />
+              <span className="hidden sm:inline">Contact &amp; Review</span>
+              <span className="sm:hidden">Contact</span>
+            </button>
+
             <button
               type="button"
               onClick={() => setShowAboutModal(true)}
@@ -750,14 +781,25 @@ export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }
           <span>
             University of Energy and Natural Resources · Department of Information Technology &amp; Decision Sciences
           </span>
-          <button
-            type="button"
-            onClick={() => setShowAboutModal(true)}
-            className="inline-flex items-center gap-1 font-bold text-[#007c82] dark:text-teal-400 hover:underline cursor-pointer"
-          >
-            <Info className="w-3.5 h-3.5" />
-            <span>About This Portal</span>
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => openContactModal()}
+              className="inline-flex items-center gap-1 font-bold text-[#007c82] dark:text-teal-400 hover:underline cursor-pointer"
+            >
+              <Mail className="w-3.5 h-3.5" />
+              <span>Contact Admin / Review</span>
+            </button>
+            <span className="text-slate-300 dark:text-slate-700">·</span>
+            <button
+              type="button"
+              onClick={() => setShowAboutModal(true)}
+              className="inline-flex items-center gap-1 font-bold text-[#007c82] dark:text-teal-400 hover:underline cursor-pointer"
+            >
+              <Info className="w-3.5 h-3.5" />
+              <span>About This Portal</span>
+            </button>
+          </div>
         </div>
       </footer>
 

@@ -705,6 +705,119 @@
         }
       },
       "required": ["id", "date", "courseId", "reason", "cancelledBy", "cancelledAt"]
+    },
+    "SupportSettings": {
+      "title": "SupportSettings",
+      "description": "Configurable HOD/Admin support email stored under systemSettings/support",
+      "type": "object",
+      "properties": {
+        "adminEmail": {
+          "type": "string",
+          "description": "Target admin/HOD email address for contact & review inquiries",
+          "maxLength": 120
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "ISO timestamp of last update",
+          "maxLength": 60
+        },
+        "updatedBy": {
+          "type": "string",
+          "description": "Admin name or email who updated support email",
+          "maxLength": 120
+        }
+      },
+      "required": ["adminEmail"]
+    },
+    "ContactMessage": {
+      "title": "ContactMessage",
+      "description": "User inquiry, dispute, access request, or portal review sent to the HOD/Admin inbox",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique message identifier (msg-...)"
+        },
+        "submitterUid": {
+          "type": "string",
+          "description": "Firebase Auth UID or verified guest device session ID"
+        },
+        "senderName": {
+          "type": "string",
+          "description": "Name of person contacting admin",
+          "maxLength": 120
+        },
+        "senderEmail": {
+          "type": "string",
+          "description": "Reply email address",
+          "maxLength": 120
+        },
+        "senderRole": {
+          "type": "string",
+          "description": "Sender role: hod, lecturer, class_rep, student, or guest",
+          "maxLength": 20
+        },
+        "category": {
+          "type": "string",
+          "description": "Inquiry category",
+          "maxLength": 30
+        },
+        "subject": {
+          "type": "string",
+          "description": "Message subject line",
+          "maxLength": 160
+        },
+        "message": {
+          "type": "string",
+          "description": "Inquiry or review message body",
+          "maxLength": 2000
+        },
+        "rating": {
+          "type": "number",
+          "description": "Optional 1-5 star portal review rating"
+        },
+        "courseCode": {
+          "type": "string",
+          "description": "Optional related course code",
+          "maxLength": 30
+        },
+        "sessionDate": {
+          "type": "string",
+          "description": "Optional related session date YYYY-MM-DD",
+          "maxLength": 25
+        },
+        "status": {
+          "type": "string",
+          "description": "Ticket status: new, in_review, or resolved",
+          "maxLength": 20
+        },
+        "adminNote": {
+          "type": "string",
+          "description": "Internal HOD resolution note",
+          "maxLength": 1000
+        },
+        "repliedBy": {
+          "type": "string",
+          "description": "HOD/Admin email or name who responded",
+          "maxLength": 120
+        },
+        "repliedAt": {
+          "type": "string",
+          "description": "ISO timestamp of reply/resolution",
+          "maxLength": 60
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp when created",
+          "maxLength": 60
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "ISO timestamp when updated",
+          "maxLength": 60
+        }
+      },
+      "required": ["id", "submitterUid", "senderName", "senderEmail", "senderRole", "category", "subject", "message", "status", "createdAt"]
     }
   },
   "firestore": {
@@ -751,6 +864,10 @@
     "/cancelledClasses/{cancelId}": {
       "schema": "CancelledClass",
       "description": "Date-specific cancelled lecture records scoped to courses"
+    },
+    "/contactMessages/{messageId}": {
+      "schema": "ContactMessage",
+      "description": "Write-by-user, HOD-read-only support inquiries and portal reviews"
     }
   }
 }

@@ -13,7 +13,8 @@ import {
   KeyRound,
   ShieldAlert,
   Navigation,
-  X
+  X,
+  Mail
 } from 'lucide-react';
 import {
   verifyCampusLocation,
@@ -50,7 +51,7 @@ function getOrCreateGuestSessionId(): string {
 }
 
 export const StudentCheckIn: React.FC = () => {
-  const { courses, isAuthorized, checkInStudentWithIndex } = useApp();
+  const { courses, isAuthorized, checkInStudentWithIndex, openContactModal } = useApp();
 
   // Parse URL query parameters
   const searchParams = useMemo(() => {
@@ -905,9 +906,22 @@ export const StudentCheckIn: React.FC = () => {
         </div>
       )}
 
-      {/* Footer Info */}
-      <div className="max-w-md w-full mx-auto text-center text-[11px] text-white/60 py-2">
-        <p>Department of Information Technology & Decision Sciences · UENR</p>
+      {/* Footer Info & Student Support Trigger */}
+      <div className="max-w-md w-full mx-auto text-center text-[11px] text-white/75 py-2 space-y-1.5">
+        <button
+          type="button"
+          onClick={() =>
+            openContactModal('attendance_dispute', {
+              courseCode: activeCourse?.code || codeParam || undefined,
+              sessionDate: dateParam || undefined
+            })
+          }
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-emerald-200 hover:text-white font-bold transition-colors cursor-pointer"
+        >
+          <Mail className="w-3.5 h-3.5" />
+          <span>Need Help or Leave Feedback? Contact Admin</span>
+        </button>
+        <p className="text-white/60">Department of Information Technology & Decision Sciences · UENR</p>
       </div>
 
     </div>

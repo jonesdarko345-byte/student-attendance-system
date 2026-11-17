@@ -279,6 +279,56 @@ service cloud.firestore {
         && (!('stats' in data) || data.stats == null || data.stats is map);
     }
 
+    function isValidContactMessageId(messageId) {
+      return isValidId(messageId) && messageId.size() >= 20 && messageId.matches('^msg-[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidContactMessageCreate(data) {
+      return data.keys().hasAll(['id', 'submitterUid', 'senderName', 'senderEmail', 'senderRole', 'category', 'subject', 'message', 'status', 'createdAt'])
+        && data.keys().hasOnly(['id', 'submitterUid', 'senderName', 'senderEmail', 'senderRole', 'category', 'subject', 'message', 'rating', 'courseCode', 'sessionDate', 'status', 'createdAt'])
+        && data.id is string && data.id.size() >= 20 && data.id.size() <= 128
+        && (
+          (isSignedIn() && data.submitterUid == request.auth.uid) ||
+          (!isSignedIn() && isValidQrSubmitterUid(data.submitterUid))
+        )
+        && data.senderName is string && data.senderName.size() > 0 && data.senderName.size() <= 120
+        && data.senderEmail is string && isValidEmailDocId(data.senderEmail)
+        && data.senderRole in ['hod', 'lecturer', 'class_rep', 'student', 'guest']
+        && data.category in ['missing_student', 'attendance_dispute', 'access_request', 'review_feedback', 'bug_technical', 'general']
+        && data.subject is string && data.subject.size() > 0 && data.subject.size() <= 160
+        && data.message is string && data.message.size() > 0 && data.message.size() <= 2000
+        && data.status == 'new'
+        && data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 60
+        && (!('rating' in data) || data.rating == null || (data.rating is number && data.rating >= 1 && data.rating <= 5))
+        && (!('courseCode' in data) || data.courseCode == null || (data.courseCode is string && data.courseCode.size() <= 30))
+        && (!('sessionDate' in data) || data.sessionDate == null || (data.sessionDate is string && data.sessionDate.size() <= 25));
+    }
+
+    function isValidContactMessageUpdate(data) {
+      return data.keys().hasAll(['id', 'submitterUid', 'senderName', 'senderEmail', 'senderRole', 'category', 'subject', 'message', 'status', 'createdAt'])
+        && data.keys().hasOnly([
+          'id', 'submitterUid', 'senderName', 'senderEmail', 'senderRole', 'category', 'subject', 'message',
+          'rating', 'courseCode', 'sessionDate', 'status', 'adminNote', 'repliedBy', 'repliedAt', 'createdAt', 'updatedAt'
+        ])
+        && data.id == existing().id
+        && data.submitterUid == existing().submitterUid
+        && data.senderName == existing().senderName
+        && data.senderEmail == existing().senderEmail
+        && data.senderRole == existing().senderRole
+        && data.category == existing().category
+        && data.subject == existing().subject
+        && data.message == existing().message
+        && data.createdAt == existing().createdAt
+        && data.status in ['new', 'in_review', 'resolved']
+        && (!('rating' in data) || data.rating == null || (data.rating is number && data.rating >= 1 && data.rating <= 5))
+        && (!('courseCode' in data) || data.courseCode == null || (data.courseCode is string && data.courseCode.size() <= 30))
+        && (!('sessionDate' in data) || data.sessionDate == null || (data.sessionDate is string && data.sessionDate.size() <= 25))
+        && (!('adminNote' in data) || data.adminNote == null || (data.adminNote is string && data.adminNote.size() <= 1000))
+        && (!('repliedBy' in data) || data.repliedBy == null || (data.repliedBy is string && data.repliedBy.size() <= 120))
+        && (!('repliedAt' in data) || data.repliedAt == null || (data.repliedAt is string && data.repliedAt.size() <= 60))
+        && (!('updatedAt' in data) || data.updatedAt == null || (data.updatedAt is string && data.updatedAt.size() <= 60));
+    }
+
     function isValidGeofenceSetting(data) {
       return data.keys().hasAll(['enabled', 'campusName', 'latitude', 'longitude', 'radiusMeters', 'rollingPinEnabled'])
         && data.keys().hasOnly(['enabled', 'campusName', 'latitude', 'longitude', 'radiusMeters', 'rollingPinEnabled', 'updatedAt', 'updatedBy'])
@@ -292,8 +342,17 @@ service cloud.firestore {
         && (!('updatedBy' in data) || data.updatedBy == null || (data.updatedBy is string && data.updatedBy.size() <= 120));
     }
 
+    function isValidSupportSetting(data) {
+      return data.keys().hasAll(['adminEmail'])
+        && data.keys().hasOnly(['adminEmail', 'updatedAt', 'updatedBy'])
+        && data.adminEmail is string && isValidEmailDocId(data.adminEmail)
+        && (!('updatedAt' in data) || data.updatedAt == null || (data.updatedAt is string && data.updatedAt.size() <= 60))
+        && (!('updatedBy' in data) || data.updatedBy == null || (data.updatedBy is string && data.updatedBy.size() <= 120));
+    }
+
     function isValidSystemSetting(data, settingId) {
       return (settingId == 'geofence' && isValidGeofenceSetting(data))
+        || (settingId == 'support' && isValidSupportSetting(data))
         || (settingId == 'autoLogging' && data.keys().hasOnly([
           'autoLogBiometricScanSuccess',
           'autoLogBiometricScanFailure',
@@ -482,11 +541,11 @@ service cloud.firestore {
       );
     }
 
-    // System Settings (Authorized Personnel Read, Admin/Lecturer Write)
+    // System Settings (Authorized Personnel Read, Admin/Lecturer Write; Support Settings HOD-only Write)
     match /systemSettings/{settingId} {
       allow get: if isAuthorizedStaff() && isValidId(settingId);
       allow list: if isAuthorizedStaff();
-      allow create, update: if isLecturerOrAdmin() && isValidId(settingId) && isValidSystemSetting(incoming(), settingId);
+      allow create, update: if (settingId == 'support' ? isAdmin() : isLecturerOrAdmin()) && isValidId(settingId) && isValidSystemSetting(incoming(), settingId);
       allow delete: if isAdmin() && isValidId(settingId);
     }
 
@@ -501,6 +560,18 @@ service cloud.firestore {
       allow create: if isValidQrTicketId(ticketId) && isValidQrCheckInCreate(incoming()) && incoming().id == ticketId;
       allow update: if isAuthorizedStaff() && isValidId(ticketId) && isValidQrCheckInUpdate(incoming());
       allow delete: if isAdmin() && isValidId(ticketId);
+    }
+
+    // Contact & Review Inbox (Public/Staff write-once creation, Strictly HOD/Admin Read/Manage/Delete)
+    match /contactMessages/{messageId} {
+      allow get: if isAdmin() && isValidId(messageId);
+      allow list: if isAdmin();
+      allow create: if isValidContactMessageId(messageId) && isValidContactMessageCreate(incoming()) && incoming().id == messageId;
+      allow update: if isAdmin()
+        && isValidId(messageId)
+        && isValidContactMessageUpdate(incoming())
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'adminNote', 'repliedBy', 'repliedAt', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(messageId);
     }
   }
 }

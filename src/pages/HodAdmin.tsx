@@ -4,6 +4,7 @@ import { GPS_ATTENDANCE_ENABLED } from '../utils/geofence';
 import { AuditLogPanel, isSensitiveAuditLog } from '../components/AuditLogPanel';
 import { AuthorizedPersonnelPanel } from '../components/AuthorizedPersonnelPanel';
 import { AutoLoggingSettingsPanel } from '../components/AutoLoggingSettingsPanel';
+import { SupportInboxPanel } from '../components/SupportInboxPanel';
 import { activeFirestoreDatabaseId } from '../lib/firebase';
 import {
   ShieldCheck,
@@ -25,7 +26,8 @@ import {
   MapPin,
   FileJson,
   Loader2,
-  Lock
+  Lock,
+  Mail
 } from 'lucide-react';
 
 export const HodAdmin: React.FC = () => {
@@ -48,7 +50,9 @@ export const HodAdmin: React.FC = () => {
     pingDatabaseLatency,
     exportDatabaseJSON,
     importDatabaseJSON,
-    loadOfficialL200Timetable
+    loadOfficialL200Timetable,
+    contactMessages,
+    unreadContactMessagesCount
   } = useApp();
 
   const [auditSensitiveOnly, setAuditSensitiveOnly] = useState<boolean>(false);
@@ -216,7 +220,8 @@ export const HodAdmin: React.FC = () => {
   const totalGovernanceAlerts =
     metrics.declinedUsers.length +
     metrics.pendingUsers.length +
-    (metrics.sensitiveLogs.length > 0 ? 1 : 0);
+    (metrics.sensitiveLogs.length > 0 ? 1 : 0) +
+    (unreadContactMessagesCount > 0 ? 1 : 0);
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
@@ -353,6 +358,35 @@ export const HodAdmin: React.FC = () => {
               </button>
             </div>
           )}
+
+          {unreadContactMessagesCount > 0 && (
+            <div className="rounded-2xl bg-teal-50 dark:bg-teal-950/40 border border-teal-200 dark:border-teal-800/70 p-4 flex flex-col justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <div className="p-2 rounded-xl bg-teal-100 dark:bg-teal-900/60 text-[#007c82] dark:text-teal-300 shrink-0">
+                  <Mail className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-xs font-black uppercase tracking-wider text-[#007c82] dark:text-teal-300 tabular-nums">
+                    {unreadContactMessagesCount} New Contact / Review{unreadContactMessagesCount === 1 ? '' : 's'}
+                  </div>
+                  <p className="text-xs text-slate-800 dark:text-slate-200 mt-1 truncate">
+                    {contactMessages.find((m) => m.status === 'new')?.subject || 'Unread message in inbox'}
+                  </p>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                    Submitted via Contact &amp; Review portal dialog.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setHodAdminTab('inbox')}
+                className="self-start inline-flex items-center gap-1.5 text-xs font-bold text-[#007c82] dark:text-teal-300 hover:underline cursor-pointer"
+              >
+                <span>Open Inbox &amp; Reply by Email</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -458,6 +492,24 @@ export const HodAdmin: React.FC = () => {
 
           <button
             type="button"
+            onClick={() => setHodAdminTab('inbox')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap ${
+              hodAdminTab === 'inbox'
+                ? 'bg-[#003b5c] text-white shadow-sm'
+                : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+            }`}
+          >
+            <Mail className="w-4 h-4" />
+            <span>Inbox &amp; Reviews ({contactMessages.length})</span>
+            {unreadContactMessagesCount > 0 && (
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] font-black bg-amber-400 text-slate-900 tabular-nums">
+                {unreadContactMessagesCount}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
             onClick={() => setHodAdminTab('autologging')}
             className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap ${
               hodAdminTab === 'autologging'
@@ -493,6 +545,8 @@ export const HodAdmin: React.FC = () => {
       )}
 
       {hodAdminTab === 'authorized' && <AuthorizedPersonnelPanel />}
+
+      {hodAdminTab === 'inbox' && <SupportInboxPanel />}
 
       {hodAdminTab === 'autologging' && <AutoLoggingSettingsPanel />}
 

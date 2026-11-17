@@ -11,7 +11,12 @@ import {
   AuthorizedUser,
   UserRole,
   AutoLoggingSettings,
-  GpsGeofenceSettings
+  GpsGeofenceSettings,
+  ContactMessage,
+  ContactMessageCategory,
+  ContactMessageStatus,
+  ContactSenderRole,
+  SupportSettings
 } from '../types';
 import { DEFAULT_UENR_GEOFENCE, GPS_ATTENDANCE_ENABLED } from '../utils/geofence';
 import {
@@ -46,7 +51,8 @@ import {
   getDocs,
   query,
   limit,
-  where
+  where,
+  enableNetwork
 } from 'firebase/firestore';
 import {
   saveTimetableToOfflineStorage,
@@ -60,7 +66,7 @@ import { streamsMatch } from '../utils/timetableHelper';
 
 export type NavigationTab = 'home' | 'attendance' | 'timetable' | 'admin' | 'reports' | 'hod_admin';
 export type AdminSubTab = 'roster' | 'authorized' | 'database' | 'audit' | 'autologging';
-export type HodAdminTab = 'audit' | 'authorized' | 'autologging' | 'database';
+export type HodAdminTab = 'audit' | 'authorized' | 'autologging' | 'inbox' | 'database';
 export type ThemeMode = 'light' | 'dark' | 'system';
 
 export interface AttendanceLaunchTarget {
@@ -228,6 +234,36 @@ interface AppContextType {
   autoLoggingSettings: AutoLoggingSettings;
   updateAutoLoggingSettings: (updates: Partial<AutoLoggingSettings>) => Promise<void>;
 
+  // Contact, Support & Reviews Inbox
+  contactMessages: ContactMessage[];
+  unreadContactMessagesCount: number;
+  supportSettings: SupportSettings;
+  updateSupportSettings: (updates: Partial<SupportSettings>) => Promise<void>;
+  isContactModalOpen: boolean;
+  contactDefaultCategory: ContactMessageCategory;
+  contactPrefill: { courseCode?: string; sessionDate?: string; subject?: string } | null;
+  openContactModal: (
+    category?: ContactMessageCategory,
+    prefill?: { courseCode?: string; sessionDate?: string; subject?: string }
+  ) => void;
+  closeContactModal: () => void;
+  submitContactMessage: (input: {
+    senderName: string;
+    senderEmail: string;
+    senderRole: ContactSenderRole;
+    category: ContactMessageCategory;
+    subject: string;
+    message: string;
+    rating?: number | null;
+    courseCode?: string | null;
+    sessionDate?: string | null;
+  }) => Promise<ContactMessage>;
+  updateContactMessage: (
+    id: string,
+    updates: { status?: ContactMessageStatus; adminNote?: string | null; markReplied?: boolean }
+  ) => Promise<void>;
+  deleteContactMessage: (id: string) => Promise<void>;
+
   // Reset
   resetToDefaults: () => void;
 }
@@ -274,6 +310,33 @@ export const matchAttendanceStream = (recordStream?: string, requestedStream?: s
   return streamsMatch(recordStream, requestedStream);
 };
 
+function generateContactHex(byteLength = 8): string {
+  if (typeof window !== 'undefined' && window.crypto?.getRandomValues) {
+    const arr = new Uint8Array(byteLength);
+    window.crypto.getRandomValues(arr);
+    return Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`.padEnd(byteLength * 2, '0').slice(0, byteLength * 2);
+}
+
+function getContactSubmitterUid(): string {
+  if (auth.currentUser?.uid) {
+    return auth.currentUser.uid;
+  }
+  const storageKey = 'uenr_qr_guest_session_id';
+  try {
+    const existing = localStorage.getItem(storageKey);
+    if (existing && /^[a-zA-Z0-9_-]{16,128}$/.test(existing)) {
+      return existing;
+    }
+    const created = `guest-${generateContactHex(16)}`;
+    localStorage.setItem(storageKey, created);
+    return created;
+  } catch {
+    return `guest-${generateContactHex(16)}`;
+  }
+}
+
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [activeTab, setActiveTab] = useState<NavigationTab>('home');
   const [attendanceLaunchTarget, setAttendanceLaunchTarget] = useState<AttendanceLaunchTarget | null>(null);
@@ -298,6 +361,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const openDatabaseTab = useCallback(() => {
     setActiveTab('hod_admin');
     setHodAdminTab('database');
+  }, []);
+
+  const [contactMessages, setContactMessages] = useState<ContactMessage[]>([]);
+  const [supportSettings, setSupportSettings] = useState<SupportSettings>({
+    adminEmail: MASTER_HOD_EMAIL
+  });
+  const [isContactModalOpen, setIsContactModalOpen] = useState<boolean>(false);
+  const [contactDefaultCategory, setContactDefaultCategory] = useState<ContactMessageCategory>('general');
+  const [contactPrefill, setContactPrefill] = useState<{
+    courseCode?: string;
+    sessionDate?: string;
+    subject?: string;
+  } | null>(null);
+
+  const openContactModal = useCallback(
+    (
+      category?: ContactMessageCategory,
+      prefill?: { courseCode?: string; sessionDate?: string; subject?: string }
+    ) => {
+      setContactDefaultCategory(category || 'general');
+      setContactPrefill(prefill || null);
+      setIsContactModalOpen(true);
+    },
+    []
+  );
+
+  const closeContactModal = useCallback(() => {
+    setIsContactModalOpen(false);
   }, []);
 
   const [authorizedUsers, setAuthorizedUsers] = useState<AuthorizedUser[]>([]);
@@ -716,6 +807,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCancelledClasses([]);
     setAuditLogs([]);
     setAuthorizedUsers([]);
+    setContactMessages([]);
+    setSupportSettings({ adminEmail: MASTER_HOD_EMAIL });
     clearSensitiveStorage();
   }, []);
 
@@ -1528,6 +1621,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     );
 
+    // 7c. Support Settings Listener (authorized staff read)
+    const unsubSupportSettings = onSnapshot(
+      doc(db, 'systemSettings', 'support'),
+      (snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.data() as Partial<SupportSettings>;
+          if (data.adminEmail && typeof data.adminEmail === 'string') {
+            setSupportSettings({
+              adminEmail: data.adminEmail.trim(),
+              updatedAt: data.updatedAt,
+              updatedBy: data.updatedBy
+            });
+          }
+        }
+      },
+      (error) => {
+        console.warn('[Firestore] Support settings listen notice:', error);
+      }
+    );
+
     // 8. Student QR Check-In Queue Listener (processes student check-in tickets securely)
     const unsubQrCheckIns = onSnapshot(
       query(collection(db, 'qrCheckIns'), where('status', '==', 'pending')),
@@ -1546,6 +1659,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     );
 
+    // 9. Contact & Review Inbox Listener (Strictly HOD-only per Firestore security rules)
+    let unsubContactMessages = () => {};
+    if (verifiedRole === 'hod') {
+      unsubContactMessages = onSnapshot(
+        collection(db, 'contactMessages'),
+        (snapshot) => {
+          const list: ContactMessage[] = [];
+          snapshot.forEach((d) => list.push(d.data() as ContactMessage));
+          list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          setContactMessages(list);
+        },
+        (error) => {
+          console.warn('[Firestore] Contact messages sync notice:', error);
+        }
+      );
+    } else {
+      setContactMessages([]);
+    }
+
     return () => {
       unsubStudents();
       unsubCourses();
@@ -1556,7 +1688,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       unsubAuthUsers();
       unsubSettings();
       unsubGeofence();
+      unsubSupportSettings();
       unsubQrCheckIns();
+      unsubContactMessages();
     };
   }, [isAuthorized, firebaseUser, verifiedRole, verifiedAssignedCourseIdsKey, wipeUnauthorizedState, processPendingQrTickets]);
 
@@ -1978,6 +2112,147 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (error) {
         console.warn(`[Firestore] Audit log write notice for auditLogs/${newLog.id}:`, error);
       }
+    }
+  };
+
+  // Contact, Support & Reviews Inbox Actions
+  const submitContactMessage = async (input: {
+    senderName: string;
+    senderEmail: string;
+    senderRole: ContactSenderRole;
+    category: ContactMessageCategory;
+    subject: string;
+    message: string;
+    rating?: number | null;
+    courseCode?: string | null;
+    sessionDate?: string | null;
+  }): Promise<ContactMessage> => {
+    const cleanName = input.senderName.trim().slice(0, 120);
+    const cleanEmail = input.senderEmail.trim().slice(0, 120);
+    const cleanSubject = input.subject.trim().slice(0, 160);
+    const cleanMessage = input.message.trim().slice(0, 2000);
+    const emailRegex = /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/;
+
+    if (!cleanName) throw new Error('Please enter your full name.');
+    if (!emailRegex.test(cleanEmail)) throw new Error('Please enter a valid reply email address.');
+    if (!cleanSubject) throw new Error('Please enter a subject for your message.');
+    if (!cleanMessage) throw new Error('Please enter your message or review details.');
+
+    const messageId = `msg-${Date.now()}-${generateContactHex(8)}`;
+    const submitterUid = getContactSubmitterUid();
+    const nowIso = new Date().toISOString();
+
+    const payload: ContactMessage = {
+      id: messageId,
+      submitterUid,
+      senderName: cleanName,
+      senderEmail: cleanEmail,
+      senderRole: input.senderRole,
+      category: input.category,
+      subject: cleanSubject,
+      message: cleanMessage,
+      status: 'new',
+      createdAt: nowIso
+    };
+
+    if (typeof input.rating === 'number' && input.rating >= 1 && input.rating <= 5) {
+      payload.rating = Math.round(input.rating);
+    }
+    const cleanCourse = input.courseCode?.trim().slice(0, 30);
+    if (cleanCourse) {
+      payload.courseCode = cleanCourse;
+    }
+    const cleanDate = input.sessionDate?.trim().slice(0, 25);
+    if (cleanDate) {
+      payload.sessionDate = cleanDate;
+    }
+
+    try {
+      await enableNetwork(db).catch(() => {});
+      await setDoc(doc(db, 'contactMessages', messageId), payload);
+      if (verifiedRole === 'hod') {
+        setContactMessages((prev) => [payload, ...prev.filter((m) => m.id !== payload.id)]);
+      }
+      return payload;
+    } catch (error) {
+      console.error('[Firestore] Failed to submit contact message:', error);
+      throw new Error(
+        error instanceof Error && error.message
+          ? `Could not submit to portal inbox (${error.message}). You can still send via your email app below.`
+          : 'Could not submit to portal inbox. You can still send via your email app below.'
+      );
+    }
+  };
+
+  const updateContactMessage = async (
+    id: string,
+    updates: { status?: ContactMessageStatus; adminNote?: string | null; markReplied?: boolean }
+  ): Promise<void> => {
+    if (verifiedRole !== 'hod' || !isAuthorized) return;
+    const nowIso = new Date().toISOString();
+    const patch: Record<string, any> = {
+      updatedAt: nowIso
+    };
+    if (updates.status) {
+      patch.status = updates.status;
+    }
+    if (updates.adminNote !== undefined) {
+      patch.adminNote = updates.adminNote ? updates.adminNote.trim().slice(0, 1000) : null;
+    }
+    if (updates.markReplied) {
+      patch.repliedBy = (currentUser.email || currentUser.name || MASTER_HOD_EMAIL).slice(0, 120);
+      patch.repliedAt = nowIso;
+    }
+
+    setContactMessages((prev) =>
+      prev.map((m) => (m.id === id ? { ...m, ...patch } : m))
+    );
+
+    try {
+      await updateDoc(doc(db, 'contactMessages', id), patch);
+      await addAuditLog(
+        'Inbox Message Updated',
+        `Updated message ${id}${updates.status ? ` (status -> ${updates.status})` : ''}${updates.markReplied ? ' (email reply logged)' : ''}`,
+        'system'
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `contactMessages/${id}`);
+    }
+  };
+
+  const deleteContactMessage = async (id: string): Promise<void> => {
+    if (verifiedRole !== 'hod' || !isAuthorized) return;
+    setContactMessages((prev) => prev.filter((m) => m.id !== id));
+    try {
+      await deleteDoc(doc(db, 'contactMessages', id));
+      await addAuditLog('Inbox Message Deleted', `Removed support/review message ${id} from HOD inbox.`, 'system');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `contactMessages/${id}`);
+    }
+  };
+
+  const updateSupportSettings = async (updates: Partial<SupportSettings>): Promise<void> => {
+    if (verifiedRole !== 'hod' || !isAuthorized) return;
+    const nextEmail = (updates.adminEmail ?? supportSettings.adminEmail).trim().slice(0, 120);
+    const emailRegex = /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/;
+    if (!emailRegex.test(nextEmail)) {
+      throw new Error('Please enter a valid admin support email address.');
+    }
+    const nextSettings: SupportSettings = {
+      adminEmail: nextEmail,
+      updatedAt: new Date().toISOString(),
+      updatedBy: (currentUser.email || currentUser.name || 'HOD').slice(0, 120)
+    };
+    setSupportSettings(nextSettings);
+    try {
+      await setDoc(doc(db, 'systemSettings', 'support'), nextSettings, { merge: true });
+      await addAuditLog(
+        'Support Email Updated',
+        `Admin support contact email updated to ${nextEmail}`,
+        'system'
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'systemSettings/support');
     }
   };
 
@@ -3420,6 +3695,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return cancelledClasses.filter((c) => allowed.has(c.courseId));
   }, [isLecturerCourseScoped, cancelledClasses, verifiedAssignedCourseIds]);
 
+  const unreadContactMessagesCount = useMemo(
+    () => (verifiedRole === 'hod' ? contactMessages.filter((m) => m.status === 'new').length : 0),
+    [contactMessages, verifiedRole]
+  );
+
   return (
     <AppContext.Provider
       value={{
@@ -3509,6 +3789,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addAuditLog,
         autoLoggingSettings,
         updateAutoLoggingSettings,
+        contactMessages,
+        unreadContactMessagesCount,
+        supportSettings,
+        updateSupportSettings,
+        isContactModalOpen,
+        contactDefaultCategory,
+        contactPrefill,
+        openContactModal,
+        closeContactModal,
+        submitContactMessage,
+        updateContactMessage,
+        deleteContactMessage,
         resetToDefaults
       }}
     >

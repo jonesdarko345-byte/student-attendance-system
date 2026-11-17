@@ -11,6 +11,7 @@ import { Admin } from './pages/Admin';
 import { Reports } from './pages/Reports';
 import { HodAdmin } from './pages/HodAdmin';
 import { StudentCheckIn } from './components/StudentCheckIn';
+import { ContactReviewModal } from './components/ContactReviewModal';
 
 const AppContent: React.FC = () => {
   const { activeTab, verifiedRole } = useApp();
@@ -28,7 +29,12 @@ const AppContent: React.FC = () => {
   }, []);
 
   if (isCheckInMode) {
-    return <StudentCheckIn />;
+    return (
+      <>
+        <StudentCheckIn />
+        <ContactReviewModal />
+      </>
+    );
   }
 
   return (
@@ -64,6 +70,7 @@ const AppContent: React.FC = () => {
         <Footer />
         <BottomNav />
       </div>
+      <ContactReviewModal />
     </AccessGate>
   );
 };

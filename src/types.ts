@@ -150,3 +150,42 @@ export interface SemesterConfig {
   endDate: string;
   isActive: boolean;
 }
+
+export type ContactMessageCategory =
+  | 'missing_student'
+  | 'attendance_dispute'
+  | 'access_request'
+  | 'review_feedback'
+  | 'bug_technical'
+  | 'general';
+
+export type ContactMessageStatus = 'new' | 'in_review' | 'resolved';
+
+export type ContactSenderRole = 'hod' | 'lecturer' | 'class_rep' | 'student' | 'guest';
+
+export interface ContactMessage {
+  id: string;
+  submitterUid: string;
+  senderName: string;
+  senderEmail: string;
+  senderRole: ContactSenderRole;
+  category: ContactMessageCategory;
+  subject: string;
+  message: string;
+  rating?: number | null;
+  courseCode?: string | null;
+  sessionDate?: string | null;
+  status: ContactMessageStatus;
+  adminNote?: string | null;
+  repliedBy?: string | null;
+  repliedAt?: string | null;
+  createdAt: string;
+  updatedAt?: string | null;
+}
+
+export interface SupportSettings {
+  adminEmail: string;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+

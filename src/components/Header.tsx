@@ -25,7 +25,9 @@ import {
   ChevronDown,
   X,
   LogIn,
-  Check
+  Check,
+  Mail,
+  MessageSquareHeart
 } from 'lucide-react';
 
 export const Header: React.FC = () => {
@@ -54,7 +56,9 @@ export const Header: React.FC = () => {
     logoutUser,
     switchAccount,
     verifiedRole,
-    clearAllStudents
+    clearAllStudents,
+    unreadContactMessagesCount,
+    openContactModal
   } = useApp();
 
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -256,6 +260,11 @@ export const Header: React.FC = () => {
                     }`}
                   />
                   <span>{item.label}</span>
+                  {item.isHodExclusive && unreadContactMessagesCount > 0 && (
+                    <span className="px-1.5 py-0.2 rounded-full bg-amber-400 text-slate-900 text-[10px] font-black tabular-nums">
+                      {unreadContactMessagesCount}
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -296,6 +305,17 @@ export const Header: React.FC = () => {
                 )}
               </div>
             )}
+
+            {/* Contact & Review Admin Button */}
+            <button
+              type="button"
+              onClick={() => openContactModal()}
+              className="hidden sm:flex items-center justify-center w-9 h-9 rounded-xl bg-black/25 hover:bg-black/40 border border-white/15 text-slate-200 hover:text-emerald-300 transition-all duration-200 cursor-pointer shrink-0"
+              title="Contact Department Admin or Submit Review"
+              aria-label="Contact Department Admin or Submit Review"
+            >
+              <Mail className="w-4 h-4" />
+            </button>
 
             {/* Global Theme Toggle Button */}
             <button
@@ -611,6 +631,26 @@ export const Header: React.FC = () => {
                             <button
                               type="button"
                               onClick={() => {
+                                setHodAdminTab('inbox');
+                                setActiveTab('hod_admin');
+                                setIsRoleMenuOpen(false);
+                              }}
+                              className="w-full flex items-center justify-between gap-2.5 px-4 py-2 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 text-left cursor-pointer"
+                            >
+                              <span className="flex items-center gap-2.5">
+                                <Mail className="w-4 h-4 text-[#007c82] dark:text-teal-400" />
+                                <span>Support Inbox &amp; Reviews</span>
+                              </span>
+                              {unreadContactMessagesCount > 0 && (
+                                <span className="px-1.5 py-0.5 rounded-full bg-amber-400 text-slate-900 text-[10px] font-black tabular-nums">
+                                  {unreadContactMessagesCount}
+                                </span>
+                              )}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
                                 openDatabaseTab();
                                 setIsRoleMenuOpen(false);
                               }}
@@ -651,6 +691,21 @@ export const Header: React.FC = () => {
                       </div>
                     )}
 
+
+                    {/* Contact & Feedback Action (Always accessible on Mobile & Desktop) */}
+                    <div className="border-t border-slate-100 dark:border-slate-800 py-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsRoleMenuOpen(false);
+                          openContactModal();
+                        }}
+                        className="w-full flex items-center gap-2.5 px-4 py-2 text-xs text-[#007c82] dark:text-teal-400 hover:bg-teal-50 dark:hover:bg-teal-950/30 text-left font-bold cursor-pointer"
+                      >
+                        <MessageSquareHeart className="w-4 h-4 text-[#007c82] dark:text-teal-400" />
+                        <span>Contact &amp; Review Admin</span>
+                      </button>
+                    </div>
 
                     {/* Account Actions */}
                     <div className="border-t border-slate-100 dark:border-slate-800 pt-1 space-y-0.5">
