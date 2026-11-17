@@ -12,14 +12,17 @@ export interface GeofenceConfig {
   allowOnlineBypass: boolean;
 }
 
+// Toggle to quickly re-enable or pause GPS attendance & campus geofencing across the portal
+export const GPS_ATTENDANCE_ENABLED = false;
+
 // Official Verified Coordinates for University of Energy and Natural Resources (UENR) Main Campus, Sunyani, Ghana
 // Location: Sunyani-Fiapre Road (Covers LTS 1, LTS 2, NEC, Pavilion, Engineering Complex, Science Blocks & Hostels)
 export const DEFAULT_UENR_GEOFENCE: GeofenceConfig = {
-  enabled: true,
+  enabled: GPS_ATTENDANCE_ENABLED,
   campusName: 'UENR Main Campus (Sunyani)',
   latitude: 7.34949,
   longitude: -2.34350,
-  radiusMeters: 2500, // 2.5km radius covers entire UENR Sunyani-Fiapre campus perimeter and student residences
+  radiusMeters: GPS_ATTENDANCE_ENABLED ? 2500 : 0, // 2.5km radius covers entire UENR Sunyani-Fiapre campus perimeter when enabled
   allowOnlineBypass: true
 };
 
@@ -95,6 +98,15 @@ export interface LocationVerificationResult {
 export const verifyCampusLocation = async (
   config: GeofenceConfig = DEFAULT_UENR_GEOFENCE
 ): Promise<LocationVerificationResult> => {
+  if (!GPS_ATTENDANCE_ENABLED || !config.enabled || config.radiusMeters <= 0) {
+    return {
+      status: 'verified',
+      isInside: true,
+      distanceMeters: 0,
+      message: 'GPS attendance verification is currently disabled.'
+    };
+  }
+
   if (typeof window === 'undefined' || !navigator.geolocation) {
     return {
       status: 'unsupported',

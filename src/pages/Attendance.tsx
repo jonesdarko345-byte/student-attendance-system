@@ -9,6 +9,7 @@ import { DEFAULT_STREAMS, TimetableSlot } from '../types';
 import { BiometricAttendance } from '../components/BiometricAttendance';
 import { ClassroomQRModal } from '../components/ClassroomQRModal';
 import { GpsAttendancePanel } from '../components/GpsAttendancePanel';
+import { GPS_ATTENDANCE_ENABLED } from '../utils/geofence';
 import {
   Calendar,
   Clock,
@@ -157,7 +158,8 @@ export const Attendance: React.FC = () => {
       setSelectedDate(attendanceLaunchTarget.date);
     }
     if (attendanceLaunchTarget.viewMode) {
-      setViewMode(attendanceLaunchTarget.viewMode);
+      const requestedMode = attendanceLaunchTarget.viewMode;
+      setViewMode(!GPS_ATTENDANCE_ENABLED && requestedMode === 'gps' ? 'manual' : requestedMode);
     }
 
     const targetCourseId =
@@ -465,17 +467,19 @@ export const Attendance: React.FC = () => {
             <Fingerprint className="w-3.5 h-3.5" />
             <span>Biometric Scanner</span>
           </button>
-          <button
-            onClick={() => setViewMode('gps')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
-              viewMode === 'gps'
-                ? 'bg-[#007c82] text-white shadow-sm'
-                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <MapPin className="w-3.5 h-3.5" />
-            <span>GPS Attendance</span>
-          </button>
+          {GPS_ATTENDANCE_ENABLED && (
+            <button
+              onClick={() => setViewMode('gps')}
+              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                viewMode === 'gps'
+                  ? 'bg-[#007c82] text-white shadow-sm'
+                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              <MapPin className="w-3.5 h-3.5" />
+              <span>GPS Attendance</span>
+            </button>
+          )}
         </div>
 
         {/* Session Action Buttons: Projector QR & Cancel Class */}
@@ -888,28 +892,30 @@ export const Attendance: React.FC = () => {
         )}
 
         {/* Active Campus GPS Geofence Summary */}
-        <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-          <div className="flex items-center gap-2 text-slate-600 dark:text-slate-300">
-            <MapPin className="w-3.5 h-3.5 text-[#007c82] dark:text-teal-400 shrink-0" />
-            <span>
-              <strong>GPS Geofence:</strong>{' '}
-              {geofenceSettings.radiusMeters > 0
-                ? `${geofenceSettings.campusName} · Radius ${
-                    geofenceSettings.radiusMeters >= 1000
-                      ? `${(geofenceSettings.radiusMeters / 1000).toFixed(1)} km`
-                      : `${geofenceSettings.radiusMeters} m`
-                  }`
-                : 'Bypassed (Online Mode)'}
-            </span>
+        {GPS_ATTENDANCE_ENABLED && (
+          <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-2 text-slate-600 dark:text-slate-300">
+              <MapPin className="w-3.5 h-3.5 text-[#007c82] dark:text-teal-400 shrink-0" />
+              <span>
+                <strong>GPS Geofence:</strong>{' '}
+                {geofenceSettings.radiusMeters > 0
+                  ? `${geofenceSettings.campusName} · Radius ${
+                      geofenceSettings.radiusMeters >= 1000
+                        ? `${(geofenceSettings.radiusMeters / 1000).toFixed(1)} km`
+                        : `${geofenceSettings.radiusMeters} m`
+                    }`
+                  : 'Bypassed (Online Mode)'}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setViewMode('gps')}
+              className="text-xs font-semibold text-[#007c82] dark:text-teal-400 hover:underline text-left sm:text-right cursor-pointer whitespace-nowrap"
+            >
+              {viewMode === 'gps' ? 'Viewing GPS Verification Panel' : 'Open GPS Verification & Hall Pinning →'}
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={() => setViewMode('gps')}
-            className="text-xs font-semibold text-[#007c82] dark:text-teal-400 hover:underline text-left sm:text-right cursor-pointer whitespace-nowrap"
-          >
-            {viewMode === 'gps' ? 'Viewing GPS Verification Panel' : 'Open GPS Verification & Hall Pinning →'}
-          </button>
-        </div>
+        )}
       </div>
 
       {/* Class Cancelled Notice Banner */}
@@ -938,7 +944,7 @@ export const Attendance: React.FC = () => {
                 </p>
               )}
               <p className="text-[11px] text-rose-700/90 dark:text-rose-300/80">
-                Cancelled by {activeCancellation.cancelledBy} · Manual checklist, Biometric scanner, GPS, and Projector QR check-ins are paused so students are not falsely marked absent.
+                Cancelled by {activeCancellation.cancelledBy} · Manual checklist, Biometric scanner{GPS_ATTENDANCE_ENABLED ? ', GPS,' : ''} and Projector QR check-ins are paused so students are not falsely marked absent.
               </p>
             </div>
           </div>
@@ -1038,7 +1044,7 @@ export const Attendance: React.FC = () => {
           )}
 
           {/* GPS PERIMETER & LOCATION CHECK-IN MODE */}
-          {viewMode === 'gps' && (
+          {GPS_ATTENDANCE_ENABLED && viewMode === 'gps' && (
             <GpsAttendancePanel
               date={selectedDate}
               course={activeCourse}
@@ -1054,7 +1060,7 @@ export const Attendance: React.FC = () => {
           )}
 
           {/* MANUAL CHECKLIST MODE */}
-          {viewMode === 'manual' && (
+          {(viewMode === 'manual' || (!GPS_ATTENDANCE_ENABLED && viewMode === 'gps')) && (
             <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 overflow-hidden">
           
           {/* Header & Quick Action Bar */}
@@ -1166,7 +1172,7 @@ export const Attendance: React.FC = () => {
                       </span>
 
                       <div className="flex items-center gap-2">
-                        {isGpsVerified && (
+                        {GPS_ATTENDANCE_ENABLED && isGpsVerified && (
                           <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 dark:text-emerald-400">
                             <MapPin className="w-3 h-3" />
                             GPS-Verified
@@ -1177,12 +1183,12 @@ export const Attendance: React.FC = () => {
                             <Fingerprint className="w-3 h-3 text-teal-600 dark:text-teal-400" />
                             Bio-Verified
                           </span>
-                        ) : !isGpsVerified && isEnrolled ? (
+                        ) : (!GPS_ATTENDANCE_ENABLED || !isGpsVerified) && isEnrolled ? (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-[10px]">
                             <Fingerprint className="w-3 h-3 text-slate-400" />
                             {student.enrolledFingers.length} finger(s)
                           </span>
-                        ) : !isGpsVerified ? (
+                        ) : !GPS_ATTENDANCE_ENABLED || !isGpsVerified ? (
                           <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium">
                             Not Enrolled
                           </span>
@@ -1291,7 +1297,7 @@ export const Attendance: React.FC = () => {
 
                         <td className="py-3.5 px-4">
                           <div className="flex items-center gap-2 flex-wrap">
-                            {isGpsVerified && (
+                            {GPS_ATTENDANCE_ENABLED && isGpsVerified && (
                               <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 dark:text-emerald-400">
                                 <MapPin className="w-3 h-3" />
                                 GPS-Verified
@@ -1302,12 +1308,12 @@ export const Attendance: React.FC = () => {
                                 <Fingerprint className="w-3 h-3 text-teal-600 dark:text-teal-400" />
                                 Bio-Verified
                               </span>
-                            ) : !isGpsVerified && isEnrolled ? (
+                            ) : (!GPS_ATTENDANCE_ENABLED || !isGpsVerified) && isEnrolled ? (
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-[11px]">
                                 <Fingerprint className="w-3 h-3 text-slate-400" />
                                 {student.enrolledFingers.length} finger(s)
                               </span>
-                            ) : !isGpsVerified ? (
+                            ) : !GPS_ATTENDANCE_ENABLED || !isGpsVerified ? (
                               <span className="text-[11px] text-amber-600 dark:text-amber-400 font-medium">
                                 Not Enrolled
                               </span>

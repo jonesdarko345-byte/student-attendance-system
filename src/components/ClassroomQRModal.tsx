@@ -3,7 +3,7 @@ import QRCode from 'qrcode';
 import { Course } from '../types';
 import { useApp, matchAttendanceStream } from '../context/AppContext';
 import { getActiveTimetableSlot, getTimeSlotStatus } from '../utils/timetableHelper';
-import { getRollingPin, getInRoomBackupPin } from '../utils/geofence';
+import { getRollingPin, getInRoomBackupPin, GPS_ATTENDANCE_ENABLED } from '../utils/geofence';
 import {
   QrCode,
   Maximize2,
@@ -63,8 +63,8 @@ export const ClassroomQRModal: React.FC<ClassroomQRModalProps> = ({
   });
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const geofenceRadius = geofenceSettings.radiusMeters;
-  const rollingPinEnabled = geofenceSettings.rollingPinEnabled;
+  const geofenceRadius = GPS_ATTENDANCE_ENABLED ? geofenceSettings.radiusMeters : 0;
+  const rollingPinEnabled = GPS_ATTENDANCE_ENABLED ? geofenceSettings.rollingPinEnabled : false;
 
   const cleanStream = stream && stream !== 'all' && stream !== 'All Streams' ? stream : 'L200 IT-A';
 
@@ -434,101 +434,107 @@ export const ClassroomQRModal: React.FC<ClassroomQRModalProps> = ({
                 </div>
 
                 {/* Geofence & In-Room PIN Security Card for Classroom Projector */}
-                <div className="w-full max-w-sm sm:max-w-md bg-gradient-to-r from-emerald-950/80 via-slate-900 to-[#002b45] border border-emerald-500/40 rounded-2xl p-3.5 text-left text-white shadow-lg space-y-2.5">
-                  <div className="flex items-center justify-between gap-2 pb-2 border-b border-white/10">
-                    <div className="flex items-center gap-2">
-                      <span className="relative flex h-2.5 w-2.5">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
-                      </span>
-                      <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-300">
-                        <MapPin className="w-3.5 h-3.5 text-emerald-400" />
-                        <span>Anti-Hostel Geofence Active</span>
-                      </div>
-                    </div>
-
-                    {/* Geofence Mode Selector */}
-                    <select
-                      value={geofenceRadius}
-                      onChange={(e) => updateGeofenceSettings({ radiusMeters: Number(e.target.value) })}
-                      className="bg-black/60 text-[10px] font-bold text-emerald-300 px-2.5 py-1 rounded-lg border border-emerald-500/40 focus:outline-none cursor-pointer"
-                      title="Radius around UENR Main Campus required to scan"
-                    >
-                      <option value={2500}>UENR Campus & Halls (2.5 km)</option>
-                      <option value={1500}>Academic Complex (1.5 km)</option>
-                      <option value={800}>Strict Hall Vicinity (800m)</option>
-                      <option value={500}>Single Lecture Hall (500m)</option>
-                      <option value={0}>Bypass Geofence (Online / Off)</option>
-                    </select>
-                  </div>
-
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <KeyRound className="w-3.5 h-3.5 text-[#8dc63f]" />
-                        <span className="text-[10px] uppercase tracking-wider font-extrabold text-slate-300">
-                          In-Room Projector PIN
+                {GPS_ATTENDANCE_ENABLED && (
+                  <div className="w-full max-w-sm sm:max-w-md bg-gradient-to-r from-emerald-950/80 via-slate-900 to-[#002b45] border border-emerald-500/40 rounded-2xl p-3.5 text-left text-white shadow-lg space-y-2.5">
+                    <div className="flex items-center justify-between gap-2 pb-2 border-b border-white/10">
+                      <div className="flex items-center gap-2">
+                        <span className="relative flex h-2.5 w-2.5">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
                         </span>
-                        {rollingPinEnabled && (
-                          <span className="text-[9px] font-mono font-black bg-emerald-500/20 text-[#8dc63f] px-1.5 py-0.5 rounded-full border border-emerald-500/30 animate-pulse">
-                            ⏳ Rotates in {rollingPinData.secondsRemaining}s
-                          </span>
-                        )}
+                        <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-300">
+                          <MapPin className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Anti-Hostel Geofence Active</span>
+                        </div>
                       </div>
-                      <p className="text-[10px] text-slate-300 line-clamp-1 mt-0.5">
-                        {rollingPinEnabled
-                          ? 'Anti-WhatsApp protection: Code auto-expires in 30s'
-                          : 'PIN override disabled. Only physical GPS permitted.'}
-                      </p>
+
+                      {/* Geofence Mode Selector */}
+                      <select
+                        value={geofenceRadius}
+                        onChange={(e) => updateGeofenceSettings({ radiusMeters: Number(e.target.value) })}
+                        className="bg-black/60 text-[10px] font-bold text-emerald-300 px-2.5 py-1 rounded-lg border border-emerald-500/40 focus:outline-none cursor-pointer"
+                        title="Radius around UENR Main Campus required to scan"
+                      >
+                        <option value={2500}>UENR Campus & Halls (2.5 km)</option>
+                        <option value={1500}>Academic Complex (1.5 km)</option>
+                        <option value={800}>Strict Hall Vicinity (800m)</option>
+                        <option value={500}>Single Lecture Hall (500m)</option>
+                        <option value={0}>Bypass Geofence (Online / Off)</option>
+                      </select>
                     </div>
 
-                    <div className="flex items-center gap-2 shrink-0">
-                      {rollingPinEnabled ? (
-                        <div className="bg-slate-950 border-2 border-emerald-400/60 px-3.5 py-1 rounded-xl text-center shadow-inner">
-                          <span className="font-mono text-xl sm:text-2xl font-black tracking-widest text-[#8dc63f] select-all">
-                            {activeDisplayPin}
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <KeyRound className="w-3.5 h-3.5 text-[#8dc63f]" />
+                          <span className="text-[10px] uppercase tracking-wider font-extrabold text-slate-300">
+                            In-Room Projector PIN
                           </span>
+                          {rollingPinEnabled && (
+                            <span className="text-[9px] font-mono font-black bg-emerald-500/20 text-[#8dc63f] px-1.5 py-0.5 rounded-full border border-emerald-500/30 animate-pulse">
+                              ⏳ Rotates in {rollingPinData.secondsRemaining}s
+                            </span>
+                          )}
                         </div>
-                      ) : (
-                        <div className="bg-slate-950/80 border border-slate-700 px-2.5 py-1 rounded-xl text-center">
-                          <span className="text-[10px] font-bold text-slate-400 uppercase">GPS Only</span>
-                        </div>
-                      )}
+                        <p className="text-[10px] text-slate-300 line-clamp-1 mt-0.5">
+                          {rollingPinEnabled
+                            ? 'Anti-WhatsApp protection: Code auto-expires in 30s'
+                            : 'PIN override disabled. Only physical GPS permitted.'}
+                        </p>
+                      </div>
 
+                      <div className="flex items-center gap-2 shrink-0">
+                        {rollingPinEnabled ? (
+                          <div className="bg-slate-950 border-2 border-emerald-400/60 px-3.5 py-1 rounded-xl text-center shadow-inner">
+                            <span className="font-mono text-xl sm:text-2xl font-black tracking-widest text-[#8dc63f] select-all">
+                              {activeDisplayPin}
+                            </span>
+                          </div>
+                        ) : (
+                          <div className="bg-slate-950/80 border border-slate-700 px-2.5 py-1 rounded-xl text-center">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase">GPS Only</span>
+                          </div>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => updateGeofenceSettings({ rollingPinEnabled: !rollingPinEnabled })}
+                          className="p-1 rounded-lg bg-black/40 hover:bg-black/70 text-slate-300 text-[10px] border border-white/20 transition-all cursor-pointer"
+                          title={rollingPinEnabled ? 'Click to disable PIN (GPS Only)' : 'Click to enable 30s Rolling PIN'}
+                        >
+                          {rollingPinEnabled ? 'Disable' : 'Enable'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Room Calibration Row */}
+                    <div className="flex items-center justify-between text-[10px] text-slate-300 pt-1.5 border-t border-white/10 flex-wrap gap-1">
+                      <span className="text-slate-400 truncate">
+                        📍 {geofenceSettings.campusName}: {geofenceSettings.latitude.toFixed(5)}, {geofenceSettings.longitude.toFixed(5)}
+                      </span>
                       <button
                         type="button"
-                        onClick={() => updateGeofenceSettings({ rollingPinEnabled: !rollingPinEnabled })}
-                        className="p-1 rounded-lg bg-black/40 hover:bg-black/70 text-slate-300 text-[10px] border border-white/20 transition-all cursor-pointer"
-                        title={rollingPinEnabled ? 'Click to disable PIN (GPS Only)' : 'Click to enable 30s Rolling PIN'}
+                        onClick={handleCalibrateLocation}
+                        disabled={isCalibrating}
+                        className="px-2 py-0.5 rounded bg-emerald-900/60 hover:bg-emerald-800 text-emerald-300 font-bold border border-emerald-500/30 transition-all cursor-pointer disabled:opacity-50 text-[10px]"
+                        title="Calibrate geofence center to your exact current lecture room GPS coordinates"
                       >
-                        {rollingPinEnabled ? 'Disable' : 'Enable'}
+                        {isCalibrating ? 'Calibrating...' : '🎯 Pin My Hall GPS'}
                       </button>
                     </div>
                   </div>
-
-                  {/* Room Calibration Row */}
-                  <div className="flex items-center justify-between text-[10px] text-slate-300 pt-1.5 border-t border-white/10 flex-wrap gap-1">
-                    <span className="text-slate-400 truncate">
-                      📍 {geofenceSettings.campusName}: {geofenceSettings.latitude.toFixed(5)}, {geofenceSettings.longitude.toFixed(5)}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={handleCalibrateLocation}
-                      disabled={isCalibrating}
-                      className="px-2 py-0.5 rounded bg-emerald-900/60 hover:bg-emerald-800 text-emerald-300 font-bold border border-emerald-500/30 transition-all cursor-pointer disabled:opacity-50 text-[10px]"
-                      title="Calibrate geofence center to your exact current lecture room GPS coordinates"
-                    >
-                      {isCalibrating ? 'Calibrating...' : '🎯 Pin My Hall GPS'}
-                    </button>
-                  </div>
-                </div>
+                )}
 
                 <div className="max-w-md space-y-1">
                   <p className="text-xs sm:text-sm font-bold text-slate-700 dark:text-slate-200">
                     ⚡ Option A: Index Number Confirmation · {activeCourse.code}
                   </p>
                   <p className="text-xs text-slate-500 dark:text-slate-400">
-                    Students scan the code, verify their campus location, enter their Index Number (e.g. <span className="font-mono font-bold text-[#007c82]">UEB3100122</span>), and get marked present instantly.
+                    {GPS_ATTENDANCE_ENABLED
+                      ? 'Students scan the code, verify their campus location, enter their Index Number (e.g. '
+                      : 'Students scan the code, enter their Index Number (e.g. '}
+                    <span className="font-mono font-bold text-[#007c82]">UEB3100122</span>
+                    {'), and get marked present instantly.'}
                   </p>
                 </div>
 

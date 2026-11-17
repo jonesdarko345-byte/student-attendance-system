@@ -1,5 +1,6 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { useApp } from '../context/AppContext';
+import { GPS_ATTENDANCE_ENABLED } from '../utils/geofence';
 import { AuditLogPanel, isSensitiveAuditLog } from '../components/AuditLogPanel';
 import { AuthorizedPersonnelPanel } from '../components/AuthorizedPersonnelPanel';
 import { AutoLoggingSettingsPanel } from '../components/AutoLoggingSettingsPanel';
@@ -577,7 +578,9 @@ export const HodAdmin: React.FC = () => {
                     Campus Geofence Radius
                   </span>
                   <span className="font-bold text-slate-800 dark:text-slate-200">
-                    {geofenceSettings.enabled ? `${geofenceSettings.radiusMeters}m (${geofenceSettings.campusName})` : 'Disabled'}
+                    {GPS_ATTENDANCE_ENABLED && geofenceSettings.enabled
+                      ? `${geofenceSettings.radiusMeters}m (${geofenceSettings.campusName})`
+                      : 'Disabled'}
                   </span>
                 </div>
                 {latencyResult && (

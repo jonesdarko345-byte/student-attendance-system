@@ -13,7 +13,7 @@ import {
   AutoLoggingSettings,
   GpsGeofenceSettings
 } from '../types';
-import { DEFAULT_UENR_GEOFENCE } from '../utils/geofence';
+import { DEFAULT_UENR_GEOFENCE, GPS_ATTENDANCE_ENABLED } from '../utils/geofence';
 import {
   INITIAL_COURSES,
   INITIAL_TIMETABLE,
@@ -385,15 +385,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Persistent Campus / Hall GPS Geofence Settings
   const defaultGeofenceSettings: GpsGeofenceSettings = {
-    enabled: DEFAULT_UENR_GEOFENCE.enabled,
+    enabled: GPS_ATTENDANCE_ENABLED ? DEFAULT_UENR_GEOFENCE.enabled : false,
     campusName: DEFAULT_UENR_GEOFENCE.campusName,
     latitude: DEFAULT_UENR_GEOFENCE.latitude,
     longitude: DEFAULT_UENR_GEOFENCE.longitude,
-    radiusMeters: DEFAULT_UENR_GEOFENCE.radiusMeters,
-    rollingPinEnabled: true
+    radiusMeters: GPS_ATTENDANCE_ENABLED ? DEFAULT_UENR_GEOFENCE.radiusMeters : 0,
+    rollingPinEnabled: GPS_ATTENDANCE_ENABLED
   };
 
   const [geofenceSettings, setGeofenceSettings] = useState<GpsGeofenceSettings>(() => {
+    if (!GPS_ATTENDANCE_ENABLED) {
+      return defaultGeofenceSettings;
+    }
     try {
       const saved = localStorage.getItem('uenr_geofence_settings');
       if (saved) return { ...defaultGeofenceSettings, ...JSON.parse(saved) };
@@ -404,6 +407,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const updateGeofenceSettings = async (updates: Partial<GpsGeofenceSettings>) => {
+    if (!GPS_ATTENDANCE_ENABLED) {
+      return;
+    }
     const nextSettings: GpsGeofenceSettings = {
       ...geofenceSettings,
       ...updates,
@@ -1105,8 +1111,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ticketCourseId,
           ticket.stream ? String(ticket.stream) : undefined,
           {
-            gpsVerified: Boolean(ticket.gpsVerified),
-            distanceMeters: typeof ticket.distanceMeters === 'number' ? ticket.distanceMeters : undefined
+            gpsVerified: GPS_ATTENDANCE_ENABLED && Boolean(ticket.gpsVerified),
+            distanceMeters:
+              GPS_ATTENDANCE_ENABLED && typeof ticket.distanceMeters === 'number'
+                ? ticket.distanceMeters
+                : undefined
           }
         );
 
@@ -1503,7 +1512,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const unsubGeofence = onSnapshot(
       doc(db, 'systemSettings', 'geofence'),
       (snapshot) => {
-        if (snapshot.exists()) {
+        if (snapshot.exists() && GPS_ATTENDANCE_ENABLED) {
           const cloudGeo = snapshot.data() as Partial<GpsGeofenceSettings>;
           setGeofenceSettings((prev) => {
             const merged = { ...prev, ...cloudGeo };
@@ -3038,17 +3047,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
+    const effectiveGpsVerified = GPS_ATTENDANCE_ENABLED && Boolean(gpsMeta?.gpsVerified);
     const baseGpsIds = Array.from(
       new Set([...(existingRecord?.gpsVerifiedStudentIds || []), ...cloudGpsIds])
     );
-    const nextGpsIds = gpsMeta?.gpsVerified
+    const nextGpsIds = effectiveGpsVerified
       ? Array.from(new Set([...baseGpsIds, student.id]))
       : baseGpsIds;
 
     // Check if already marked present in either local state or cloud
     const wasAlreadyPresent = (existingRecord?.records?.[student.id] === 'present') || (cloudRecords[student.id] === 'present');
     if (wasAlreadyPresent) {
-      if (gpsMeta?.gpsVerified && !baseGpsIds.includes(student.id)) {
+      if (effectiveGpsVerified && !baseGpsIds.includes(student.id)) {
         try {
           await setDoc(doc(db, 'attendance', recordId), { gpsVerifiedStudentIds: nextGpsIds }, { merge: true });
         } catch {}
@@ -3124,11 +3134,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 3. Write immutable audit log
     try {
-      const gpsTag = gpsMeta?.gpsVerified
-        ? ` [GPS Verified${typeof gpsMeta.distanceMeters === 'number' ? `, ~${gpsMeta.distanceMeters}m from hall` : ''}]`
+      const gpsTag = effectiveGpsVerified
+        ? ` [GPS Verified${typeof gpsMeta?.distanceMeters === 'number' ? `, ~${gpsMeta.distanceMeters}m from hall` : ''}]`
         : '';
       await addAuditLog(
-        gpsMeta?.gpsVerified ? 'GPS Check-In' : 'QR Check-In',
+        effectiveGpsVerified ? 'GPS Check-In' : 'QR Check-In',
         `${student.name} (${student.indexNumber}) checked in for ${course?.code || 'lecture'}${gpsTag}`,
         'attendance'
       );

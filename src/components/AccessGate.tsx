@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
+import { GPS_ATTENDANCE_ENABLED } from '../utils/geofence';
 import { UserRole } from '../types';
 import {
   ShieldCheck,
@@ -625,7 +626,7 @@ export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }
             </h2>
 
             <p className="text-sm sm:text-base text-slate-600 dark:text-slate-300 leading-relaxed max-w-2xl">
-              An institutional academic integrity platform for managing classroom roll calls, geofenced live QR check-ins, and 75% examination eligibility compliance across ITDS courses.
+              An institutional academic integrity platform for managing classroom roll calls, {GPS_ATTENDANCE_ENABLED ? 'geofenced live QR check-ins' : 'live QR check-ins'}, and 75% examination eligibility compliance across ITDS courses.
             </p>
 
             {/* Feature Highlights (Zero private data displayed) */}
@@ -637,7 +638,9 @@ export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }
                 <div>
                   <h3 className="text-xs font-bold text-slate-900 dark:text-white">Live Classroom QR</h3>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
-                    Anti-hostel campus geofencing with 30-second rolling projector PIN verification.
+                    {GPS_ATTENDANCE_ENABLED
+                      ? 'Anti-hostel campus geofencing with 30-second rolling projector PIN verification.'
+                      : 'Single-device anti-proxy classroom QR check-ins synced live to the lecturer terminal.'}
                   </p>
                 </div>
               </div>
@@ -820,7 +823,7 @@ export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }
                   <span>Purpose &amp; Institutional Compliance</span>
                 </h4>
                 <p>
-                  This portal is the official digital attendance and academic compliance platform built for the Department of Information Technology &amp; Decision Sciences at the University of Energy and Natural Resources (UENR). It replaces paper sign-in sheets with biometric verification, GPS-geofenced classroom QR check-ins, and automated <strong>75% examination eligibility tracking</strong>.
+                  This portal is the official digital attendance and academic compliance platform built for the Department of Information Technology &amp; Decision Sciences at the University of Energy and Natural Resources (UENR). It replaces paper sign-in sheets with biometric verification, {GPS_ATTENDANCE_ENABLED ? 'GPS-geofenced classroom QR check-ins' : 'live classroom QR check-ins'}, and automated <strong>75% examination eligibility tracking</strong>.
                 </p>
               </div>
 

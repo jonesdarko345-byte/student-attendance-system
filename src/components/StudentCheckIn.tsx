@@ -19,7 +19,8 @@ import {
   verifyCampusLocation,
   DEFAULT_UENR_GEOFENCE,
   getInRoomBackupPin,
-  validateRollingPin
+  validateRollingPin,
+  GPS_ATTENDANCE_ENABLED
 } from '../utils/geofence';
 
 type LocationState = 'checking' | 'verified' | 'outside' | 'denied' | 'pin_unlocked' | 'bypassed' | 'error';
@@ -63,7 +64,8 @@ export const StudentCheckIn: React.FC = () => {
   const lecturerParam = searchParams.get('lecturer') || '';
   const dateParam = searchParams.get('date') || new Date().toISOString().split('T')[0];
   const streamParam = searchParams.get('stream') || 'L200 IT-A';
-  const geoParam = searchParams.get('geo') ?? '2500';
+  const rawGeoParam = searchParams.get('geo') ?? '2500';
+  const geoParam = GPS_ATTENDANCE_ENABLED ? rawGeoParam : '0';
   const pinParam = searchParams.get('pin') || '';
   const latParam = searchParams.get('lat') || '';
   const lngParam = searchParams.get('lng') || '';
@@ -76,7 +78,7 @@ export const StudentCheckIn: React.FC = () => {
   const [isDeviceLocked, setIsDeviceLocked] = useState<boolean>(false);
 
   // Geofence & Location state
-  const [locStatus, setLocStatus] = useState<LocationState>('checking');
+  const [locStatus, setLocStatus] = useState<LocationState>(geoParam === '0' ? 'bypassed' : 'checking');
   const [locDetails, setLocDetails] = useState<{
     dist?: number;
     acc?: number;
@@ -156,7 +158,7 @@ export const StudentCheckIn: React.FC = () => {
 
   // Geofence Verification Runner
   const performLocationCheck = async () => {
-    if (geoParam === '0') {
+    if (!GPS_ATTENDANCE_ENABLED || geoParam === '0') {
       setLocStatus('bypassed');
       return;
     }
@@ -245,7 +247,7 @@ export const StudentCheckIn: React.FC = () => {
     }
 
     // Geofence & Physical Presence Validation
-    if (geoParam !== '0') {
+    if (GPS_ATTENDANCE_ENABLED && geoParam !== '0') {
       if (locStatus === 'checking') {
         setErrorMsg('Checking GPS location... Please wait a moment while we verify campus presence.');
         return;
@@ -299,8 +301,8 @@ export const StudentCheckIn: React.FC = () => {
           activeCourse.id,
           streamParam,
           {
-            gpsVerified: locStatus === 'verified',
-            distanceMeters: typeof locDetails.dist === 'number' ? locDetails.dist : undefined
+            gpsVerified: GPS_ATTENDANCE_ENABLED && locStatus === 'verified',
+            distanceMeters: GPS_ATTENDANCE_ENABLED && typeof locDetails.dist === 'number' ? locDetails.dist : undefined
           }
         );
       } else {
@@ -347,8 +349,8 @@ export const StudentCheckIn: React.FC = () => {
           date: dateParam.slice(0, 20),
           stream: (streamParam || 'L200 IT-A').slice(0, 40),
           status: 'pending',
-          gpsVerified: locStatus === 'verified',
-          distanceMeters: typeof locDetails.dist === 'number' ? locDetails.dist : null,
+          gpsVerified: GPS_ATTENDANCE_ENABLED && locStatus === 'verified',
+          distanceMeters: GPS_ATTENDANCE_ENABLED && typeof locDetails.dist === 'number' ? locDetails.dist : null,
           createdAt: new Date().toISOString()
         });
 
