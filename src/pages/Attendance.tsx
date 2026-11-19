@@ -444,73 +444,76 @@ export const Attendance: React.FC = () => {
           </p>
         </div>
 
-        {/* Mode Selector Tabs */}
-        <div className="flex items-center bg-white dark:bg-slate-900 p-1 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-x-auto">
-          <button
-            onClick={() => setViewMode('manual')}
-            className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
-              viewMode === 'manual'
-                ? 'bg-[#007c82] text-white shadow-sm'
-                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            Manual Checklist
-          </button>
-          <button
-            onClick={() => setViewMode('biometric')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
-              viewMode === 'biometric'
-                ? 'bg-[#007c82] text-white shadow-sm'
-                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <Fingerprint className="w-3.5 h-3.5" />
-            <span>Biometric Scanner</span>
-          </button>
-          {GPS_ATTENDANCE_ENABLED && (
+        {/* Navigation & Action Controls Toolbar */}
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Mode Selector Tabs */}
+          <div className="flex items-center bg-white dark:bg-slate-900 p-1 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-x-auto">
             <button
-              onClick={() => setViewMode('gps')}
-              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
-                viewMode === 'gps'
+              onClick={() => setViewMode('manual')}
+              className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                viewMode === 'manual'
                   ? 'bg-[#007c82] text-white shadow-sm'
                   : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
             >
-              <MapPin className="w-3.5 h-3.5" />
-              <span>GPS Attendance</span>
+              Manual Checklist
             </button>
-          )}
-        </div>
-
-        {/* Session Action Buttons: Projector QR & Cancel Class */}
-        <div className="flex items-center gap-2 flex-wrap">
-          {activeCourse && !activeCancellation && !isFinalized && canManageCancellations && (
             <button
-              type="button"
-              onClick={() => setShowCancelModal(true)}
-              className="px-3.5 py-2.5 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/50 dark:hover:bg-rose-900/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
-              title={`Cancel ${activeCourse.code} class session for ${selectedDate}`}
+              onClick={() => setViewMode('biometric')}
+              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                viewMode === 'biometric'
+                  ? 'bg-[#007c82] text-white shadow-sm'
+                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+              }`}
             >
-              <Ban className="w-4 h-4" />
-              <span>Cancel Class</span>
+              <Fingerprint className="w-3.5 h-3.5" />
+              <span>Biometric Scanner</span>
             </button>
-          )}
+            {GPS_ATTENDANCE_ENABLED && (
+              <button
+                onClick={() => setViewMode('gps')}
+                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                  viewMode === 'gps'
+                    ? 'bg-[#007c82] text-white shadow-sm'
+                    : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <MapPin className="w-3.5 h-3.5" />
+                <span>GPS Attendance</span>
+              </button>
+            )}
+          </div>
 
-          {/* Live Projector QR Attendance Launch Button */}
-          <button
-            id="launch-classroom-qr-btn"
-            onClick={() => setShowQRModal(true)}
-            disabled={!activeCourse || Boolean(activeCancellation)}
-            className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white dark:bg-teal-700 dark:hover:bg-teal-600 text-xs font-bold transition-all shadow-sm flex items-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap shrink-0"
-            title={
-              activeCancellation
-                ? `Class cancelled for ${selectedDate}`
-                : `Display high-visibility live QR code for ${activeCourse?.code || 'lecture'} on classroom projector`
-            }
-          >
-            <QrCode className="w-4 h-4 text-[#8dc63f] dark:text-emerald-300" />
-            <span>Projector QR {activeCourse ? `(${activeCourse.code})` : 'Attendance'}</span>
-          </button>
+          {/* Session Action Buttons: Projector QR & Cancel Class */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {activeCourse && !activeCancellation && !isFinalized && canManageCancellations && (
+              <button
+                type="button"
+                onClick={() => setShowCancelModal(true)}
+                className="px-3.5 py-2.5 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/50 dark:hover:bg-rose-900/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
+                title={`Cancel ${activeCourse.code} class session for ${selectedDate}`}
+              >
+                <Ban className="w-4 h-4" />
+                <span>Cancel Class</span>
+              </button>
+            )}
+
+            {/* Live Projector QR Attendance Launch Button */}
+            <button
+              id="launch-classroom-qr-btn"
+              onClick={() => setShowQRModal(true)}
+              disabled={!activeCourse || Boolean(activeCancellation)}
+              className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white dark:bg-teal-700 dark:hover:bg-teal-600 text-xs font-bold transition-all shadow-sm flex items-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap shrink-0"
+              title={
+                activeCancellation
+                  ? `Class cancelled for ${selectedDate}`
+                  : `Display high-visibility live QR code for ${activeCourse?.code || 'lecture'} on classroom projector`
+              }
+            >
+              <QrCode className="w-4 h-4 text-[#8dc63f] dark:text-emerald-300" />
+              <span>Projector QR {activeCourse ? `(${activeCourse.code})` : 'Attendance'}</span>
+            </button>
+          </div>
         </div>
       </div>
 
