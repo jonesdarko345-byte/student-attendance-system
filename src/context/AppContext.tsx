@@ -862,6 +862,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       batch.delete(doc(db, 'authorizedUsers', 'auth-3'));
       needsCommit = true;
 
+      // Ensure master HOD record always exists in authorizedUsers & authorizedEmails
+      const masterEmail = MASTER_HOD_EMAIL.toLowerCase();
+      batch.set(
+        doc(db, 'authorizedUsers', 'auth-master-hod'),
+        {
+          id: 'auth-master-hod',
+          email: masterEmail,
+          name: 'Jones Darko',
+          role: 'hod',
+          department: 'Department of Information Technology',
+          status: 'active',
+          addedAt: new Date().toISOString().split('T')[0]
+        },
+        { merge: true }
+      );
+      batch.set(
+        doc(db, 'authorizedEmails', masterEmail),
+        {
+          email: masterEmail,
+          name: 'Jones Darko',
+          role: 'hod',
+          department: 'Department of Information Technology',
+          status: 'active',
+          userDocId: 'auth-master-hod',
+          addedAt: new Date().toISOString().split('T')[0]
+        },
+        { merge: true }
+      );
+      needsCommit = true;
+
       // Load courses to backfill legacy courseAssigned text to assignedCourseIds when needed
       let catalogCourses: Course[] = [];
       try {
@@ -3240,8 +3270,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, message: 'Please enter your student index number.' };
     }
 
-    // Match student from roster
-    const student = students.find((s) => {
+    // Match student from roster (with localStorage fallback if state students array is empty/loading)
+    let rosterStudents = students;
+    if (rosterStudents.length === 0) {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEYS.STUDENTS);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            rosterStudents = parsed;
+          }
+        }
+      } catch {}
+    }
+
+    const student = rosterStudents.find((s) => {
       const sIndex = (s.indexNumber || '').trim().toUpperCase();
       const sNorm = sIndex.replace(/[^A-Z0-9]/g, '');
       return sIndex === cleanInput || sNorm === normalizedInput;

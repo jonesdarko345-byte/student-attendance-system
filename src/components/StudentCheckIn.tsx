@@ -114,6 +114,17 @@ export const StudentCheckIn: React.FC = () => {
   }, [courseIdParam, courses, selectedCourseId]);
 
   const activeCourse = useMemo(() => {
+    // If URL has code and title parameters, render immediately without waiting for Firestore courses array
+    if (codeParam && titleParam) {
+      return {
+        id: courseIdParam || 'course-param',
+        code: codeParam,
+        title: titleParam,
+        creditHours: 3,
+        lecturer: lecturerParam || 'Course Lecturer',
+        department: 'Department of Information Technology'
+      };
+    }
     const target = (selectedCourseId || courseIdParam || '').trim().toLowerCase();
     if (courses && courses.length > 0) {
       if (!target) return courses[0];
@@ -124,9 +135,9 @@ export const StudentCheckIn: React.FC = () => {
         courses[0]
       );
     }
-    if (courseIdParam) {
+    if (courseIdParam || codeParam) {
       return {
-        id: courseIdParam,
+        id: courseIdParam || 'course-param',
         code: codeParam || courseIdParam,
         title: titleParam || 'Classroom Lecture Session',
         creditHours: 3,
@@ -134,7 +145,14 @@ export const StudentCheckIn: React.FC = () => {
         department: 'Department of Information Technology'
       };
     }
-    return null;
+    return {
+      id: courseIdParam || 'course-param',
+      code: codeParam || 'INFT',
+      title: titleParam || 'Classroom Lecture Session',
+      creditHours: 3,
+      lecturer: lecturerParam || 'Course Lecturer',
+      department: 'Department of Information Technology'
+    };
   }, [courses, selectedCourseId, courseIdParam, codeParam, titleParam, lecturerParam]);
 
   // Device Lock Check: verify if this physical device already submitted attendance for this lecture session

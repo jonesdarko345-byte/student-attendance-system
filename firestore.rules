@@ -14,7 +14,6 @@ service cloud.firestore {
 
     function isVerifiedUser() {
       return isSignedIn()
-        && request.auth.token.email_verified == true
         && request.auth.token.email is string
         && request.auth.token.email.size() > 0;
     }
